@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { db, captures } from "@/db";
-import { getRequestContext } from "@opennextjs/cloudflare";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 /**
  * POST /api/v1/captures
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Recording is too long. Keep notes under about 20 minutes." }, { status: 413 });
     }
     audioKey = `captures/${userId}/${id}.webm`;
-    const { env } = getRequestContext();
+    const { env } = getCloudflareContext();
     await env.AUDIO.put(audioKey, audio.stream(), {
       httpMetadata: { contentType: audio.type || "audio/webm" },
     });
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
     capturedAt,
   });
 
-  const { env } = getRequestContext();
+  const { env } = getCloudflareContext();
   await env.CAPTURE_QUEUE.send({ captureId: id, userId });
 
   return NextResponse.json({ id, status: "uploaded" }, { status: 202 });

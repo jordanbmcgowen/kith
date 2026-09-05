@@ -19,13 +19,34 @@ Claude Code against that repo.
 ### 2. Neon
 
 - New project, region `us-east-2` (closest to Dallas of the common ones).
-- Copy the **pooled** connection string (the host contains `-pooler`). The
-  serverless driver needs the pooler.
-- In the Neon SQL editor run:
+- In the Neon SQL editor run, before any migration:
   ```sql
   CREATE EXTENSION IF NOT EXISTS vector;
   CREATE EXTENSION IF NOT EXISTS pg_trgm;
   ```
+- Copy **both** connection strings. They point at the same database. Neon
+  shows one at a time; the **Connection pooling** toggle in the connection
+  widget switches between them.
+
+  | Variable | Neon toggle | Host | Used by |
+  |---|---|---|---|
+  | `DATABASE_URL` | pooling **on** | contains `-pooler` | the app and the Worker, at runtime |
+  | `DIRECT_URL` | pooling **off** | no `-pooler` | `drizzle-kit generate` and `drizzle-kit migrate` |
+
+  **Why two, and why this bites.** The pooled host is PgBouncer in transaction
+  pooling mode. The serverless driver wants it, because Workers open many
+  short lived connections and the pooler is what makes that survivable. But
+  transaction mode has no session level advisory locks, and `drizzle-kit
+  migrate` takes one so two migrations cannot run at the same time. Point
+  migrations at the pooled host and they hang, or fail with a lock error that
+  does not explain itself.
+
+  `drizzle.config.ts` reads `DIRECT_URL` and nothing else. It throws a named
+  error rather than falling back to `DATABASE_URL`, because a silent fallback
+  here is the bug this table exists to prevent.
+
+  `DIRECT_URL` is a local value for running migrations. It never becomes a
+  Worker secret.
 - Free tier is genuinely fine until you have real users.
 
 ### 3. Google Cloud — OAuth client
@@ -60,7 +81,7 @@ OPENAI_API_KEY       platform.openai.com  (Whisper + embeddings)
 Set them as Worker secrets, not in the repo:
 
 ```bash
-wrangler secret put DATABASE_URL
+wrangler secret put DATABASE_URL      # the POOLED string
 wrangler secret put AUTH_SECRET
 wrangler secret put AUTH_GOOGLE_ID
 wrangler secret put AUTH_GOOGLE_SECRET
@@ -70,11 +91,17 @@ wrangler secret put OPENAI_API_KEY
 
 ### 6. Deploy
 
+Migrations read `DIRECT_URL` from your local `.env`. The deploys read nothing
+from `.env`; the Workers use the secrets you set in step 5.
+
 ```bash
-npm run db:generate && npm run db:migrate
-npm run deploy
-npm run deploy:worker
+npm run db:generate && npm run db:migrate    # uses DIRECT_URL
+npm run deploy                               # the app
+npm run deploy:worker                        # the queue consumer
 ```
+
+If `db:migrate` hangs with no output, you have pointed `DIRECT_URL` at the
+pooled host. Check that it does not contain `-pooler`.
 
 ---
 

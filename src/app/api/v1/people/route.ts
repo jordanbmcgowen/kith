@@ -2,6 +2,18 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { db, people } from "@/db";
 import { isNull } from "drizzle-orm";
+import { z } from "zod";
+
+/** Circles must match the `circle` enum in src/db/schema.ts. */
+const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
+
+const newPerson = z.object({
+  displayName: z.string().trim().min(1, "Name is required"),
+  circle: z.enum(CIRCLES).default("other"),
+  role: z.string().trim().nullish(),
+  pronunciation: z.string().trim().nullish(),
+  goesBy: z.string().trim().nullish(),
+});
 
 export async function GET(req: Request) {
   const userId = await requireUser();
@@ -17,12 +29,15 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const userId = await requireUser();
-  const body = await req.json();
-  if (!body.displayName) return NextResponse.json({ error: "Name is required" }, { status: 400 });
+  const parsed = newPerson.safeParse(await req.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  }
+  const body = parsed.data;
   const [row] = await db().insert(people).values({
     userId,
     displayName: body.displayName,
-    circle: body.circle ?? "other",
+    circle: body.circle,
     role: body.role ?? null,
     pronunciation: body.pronunciation ?? null,
     goesBy: body.goesBy ?? null,

@@ -20,8 +20,11 @@ export const GOOGLE_SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/contacts.readonly",
+  // Phase 2, not before. Uncommenting either of these puts every sign-in
+  // behind an "unverified app" screen and starts spending the 100-account
+  // cap, for data nothing reads yet.
+  //   "https://www.googleapis.com/auth/calendar.readonly",
+  //   "https://www.googleapis.com/auth/contacts.readonly",
 ].join(" ");
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
