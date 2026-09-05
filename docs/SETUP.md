@@ -59,10 +59,10 @@ Claude Code against that repo.
 - Credentials → Create OAuth client ID → Web application.
   - Authorized JavaScript origins:
     - `http://localhost:3000`
-    - `https://app.withkith.app`
+    - `https://withkith.app`
   - Authorized redirect URIs (the path is fixed by Auth.js, do not invent one):
     - `http://localhost:3000/api/auth/callback/google`
-    - `https://app.withkith.app/api/auth/callback/google`
+    - `https://withkith.app/api/auth/callback/google`
 - Copy the client ID and secret into `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`.
 
 ### 4. Cloudflare

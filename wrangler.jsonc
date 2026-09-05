@@ -17,7 +17,7 @@
   // builds the wrong OAuth callback and Google rejects it. AUTH_TRUST_HOST is
   // required off Vercel; without it Auth.js refuses to infer the host.
   "vars": {
-    "AUTH_URL": "https://app.withkith.app",
+    "AUTH_URL": "https://withkith.app",
     "AUTH_TRUST_HOST": "true"
   },
 
