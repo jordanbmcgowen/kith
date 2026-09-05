@@ -23,7 +23,16 @@ import { relations, sql } from "drizzle-orm";
 
 /* ------------------------------------------------------------------ enums */
 
-export const circleEnum = pgEnum("circle", [
+/**
+ * NOTE the Postgres type name is `circle_kind`, not `circle`.
+ *
+ * `circle` is a built-in Postgres geometric type in pg_catalog, and pg_catalog
+ * is always searched before the schema search path. An enum named `circle`
+ * therefore gets shadowed: the column resolves to pg_catalog.circle and the
+ * migration dies on `DEFAULT 'other'` with "invalid input syntax for type
+ * circle". The column is still named `circle`; only the type name changed.
+ */
+export const circleEnum = pgEnum("circle_kind", [
   "family", "friends", "work", "neighbors", "other",
 ]);
 

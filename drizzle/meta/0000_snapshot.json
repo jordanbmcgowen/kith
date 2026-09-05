@@ -1,5 +1,5 @@
 {
-  "id": "f9eb2f23-222e-4a84-9075-9298d485d1f8",
+  "id": "9239c53e-ce26-4410-9dab-51db9452359c",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -952,7 +952,7 @@
         },
         "circle": {
           "name": "circle",
-          "type": "circle",
+          "type": "circle_kind",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
@@ -1896,8 +1896,8 @@
         "failed"
       ]
     },
-    "public.circle": {
-      "name": "circle",
+    "public.circle_kind": {
+      "name": "circle_kind",
       "schema": "public",
       "values": [
         "family",

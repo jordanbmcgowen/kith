@@ -1,6 +1,6 @@
 CREATE TYPE "public"."capture_kind" AS ENUM('voice', 'text', 'photo', 'calendar');--> statement-breakpoint
 CREATE TYPE "public"."capture_status" AS ENUM('uploaded', 'transcribing', 'extracting', 'needs_review', 'filed', 'failed');--> statement-breakpoint
-CREATE TYPE "public"."circle" AS ENUM('family', 'friends', 'work', 'neighbors', 'other');--> statement-breakpoint
+CREATE TYPE "public"."circle_kind" AS ENUM('family', 'friends', 'work', 'neighbors', 'other');--> statement-breakpoint
 CREATE TYPE "public"."fact_kind" AS ENUM('identity', 'relation', 'preference', 'history', 'sensitive', 'context');--> statement-breakpoint
 CREATE TYPE "public"."place_kind" AS ENUM('home', 'work', 'venue', 'city', 'other');--> statement-breakpoint
 CREATE TYPE "public"."thread_status" AS ENUM('open', 'done', 'dropped');--> statement-breakpoint
@@ -101,7 +101,7 @@ CREATE TABLE "people" (
 	"goes_by" text,
 	"pronunciation" text,
 	"pronouns" text,
-	"circle" "circle" DEFAULT 'other' NOT NULL,
+	"circle" "circle_kind" DEFAULT 'other' NOT NULL,
 	"role" text,
 	"company" text,
 	"title" text,
