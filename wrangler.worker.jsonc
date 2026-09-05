@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kith-processor",
+  "main": "src/workers/process-capture.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "kith-audio" }],
+  "queues": {
+    "consumers": [{
+      "queue": "kith-captures",
+      "max_batch_size": 5,
+      "max_batch_timeout": 10,
+      "max_retries": 3,
+      "dead_letter_queue": "kith-captures-dlq"
+    }]
+  },
+  "triggers": { "crons": ["0 8 * * *"] },
+  "observability": { "enabled": true }
+}

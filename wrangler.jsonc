@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kith",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+
+  "r2_buckets": [
+    { "binding": "AUDIO", "bucket_name": "kith-audio" }
+  ],
+  "queues": {
+    "producers": [{ "binding": "CAPTURE_QUEUE", "queue": "kith-captures" }]
+  },
+  "observability": { "enabled": true }
+
+  // Secrets are set with `wrangler secret put`, never committed:
+  //   DATABASE_URL  AUTH_SECRET  AUTH_GOOGLE_ID  AUTH_GOOGLE_SECRET
+  //   ANTHROPIC_API_KEY  OPENAI_API_KEY  GOOGLE_PLACES_KEY
+  //   VAPID_PUBLIC_KEY  VAPID_PRIVATE_KEY
+}
