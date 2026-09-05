@@ -57,9 +57,12 @@ Claude Code against that repo.
 - Scopes: for now add **only** `openid`, `email`, `profile`. These are
   non-sensitive and need no review.
 - Credentials → Create OAuth client ID → Web application.
-  - Authorized redirect URIs:
+  - Authorized JavaScript origins:
+    - `http://localhost:3000`
+    - `https://app.withkith.app`
+  - Authorized redirect URIs (the path is fixed by Auth.js, do not invent one):
     - `http://localhost:3000/api/auth/callback/google`
-    - `https://kith.<yourdomain>.com/api/auth/callback/google`
+    - `https://app.withkith.app/api/auth/callback/google`
 - Copy the client ID and secret into `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`.
 
 ### 4. Cloudflare

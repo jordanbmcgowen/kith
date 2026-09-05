@@ -12,6 +12,15 @@
   "queues": {
     "producers": [{ "binding": "CAPTURE_QUEUE", "queue": "kith-captures" }]
   },
+
+  // Not secrets. AUTH_URL must match the deployed origin exactly or Auth.js
+  // builds the wrong OAuth callback and Google rejects it. AUTH_TRUST_HOST is
+  // required off Vercel; without it Auth.js refuses to infer the host.
+  "vars": {
+    "AUTH_URL": "https://app.withkith.app",
+    "AUTH_TRUST_HOST": "true"
+  },
+
   "observability": { "enabled": true }
 
   // Secrets are set with `wrangler secret put`, never committed:
