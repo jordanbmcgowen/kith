@@ -26,7 +26,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250830.0",
+    "@cloudflare/workers-types": "^5.20260903.1",
     "@opennextjs/cloudflare": "^1.6.0",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
