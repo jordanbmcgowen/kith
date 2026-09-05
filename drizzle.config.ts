@@ -12,8 +12,20 @@ import type { Config } from "drizzle-kit";
  * DATABASE_URL stays pooled, because the serverless driver needs the pooler
  * at runtime. See docs/SETUP.md step 2.
  */
-const url = process.env.DIRECT_URL;
-if (!url) {
+const url = process.env.DIRECT_URL ?? "";
+
+// The mistake this file exists to catch. A pooled host here means `migrate`
+// hangs on an advisory lock PgBouncer will never grant.
+if (url.includes("-pooler")) {
+  throw new Error(
+    "DIRECT_URL points at Neon's POOLED host. Migrations need the direct one, " +
+      "whose host has no `-pooler`. See docs/SETUP.md step 2.",
+  );
+}
+
+// `generate` only reads schema.ts and never connects, so it is allowed to run
+// with no credentials at all. `migrate` connects, and says so plainly.
+if (!url && process.argv.some((a) => a.includes("migrate") || a.includes("push") || a.includes("studio"))) {
   throw new Error(
     "DIRECT_URL is not set. Migrations need Neon's DIRECT connection string " +
       "(the host WITHOUT `-pooler`), not the pooled DATABASE_URL. See docs/SETUP.md step 2.",
