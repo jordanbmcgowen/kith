@@ -11,7 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pipeline:check": "esbuild scripts/pipeline-check.ts --bundle --platform=node --format=esm --outfile=.wrangler/tmp/pipeline-check.mjs --log-level=warning && node --env-file-if-exists=.env .wrangler/tmp/pipeline-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

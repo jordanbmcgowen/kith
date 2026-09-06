@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { route } from "@/lib/api";
 import { db, people } from "@/db";
 import { isNull } from "drizzle-orm";
 import { z } from "zod";
@@ -15,7 +16,7 @@ const newPerson = z.object({
   goesBy: z.string().trim().nullish(),
 });
 
-export async function GET(req: Request) {
+export const GET = route(async (req: Request) => {
   const userId = await requireUser();
   const circle = new URL(req.url).searchParams.get("circle");
   const rows = await db().query.people.findMany({
@@ -25,9 +26,9 @@ export async function GET(req: Request) {
     limit: 500,
   });
   return NextResponse.json({ people: rows });
-}
+});
 
-export async function POST(req: Request) {
+export const POST = route(async (req: Request) => {
   const userId = await requireUser();
   const parsed = newPerson.safeParse(await req.json());
   if (!parsed.success) {
@@ -43,4 +44,4 @@ export async function POST(req: Request) {
     goesBy: body.goesBy ?? null,
   }).returning();
   return NextResponse.json({ person: row }, { status: 201 });
-}
+});

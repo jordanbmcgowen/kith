@@ -26,7 +26,9 @@ export * from "./schema";
  * that one place and build it inside the request, never at module scope.
  */
 export function db() {
-  const url = process.env.DATABASE_URL;
+  // Trimmed: a connection string pasted with a trailing space or newline
+  // fails to parse, and the error does not say why.
+  const url = process.env.DATABASE_URL?.trim();
   if (!url) throw new Error("DATABASE_URL is not set");
   return drizzle(neon(url), { schema });
 }

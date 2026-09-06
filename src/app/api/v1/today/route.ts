@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { route } from "@/lib/api";
 import { db, people, places, personPlaces, threads } from "@/db";
 import { and, eq, lte, sql, isNull, gte, inArray } from "drizzle-orm";
 import { bbox, haversineM, locationBoost } from "@/lib/geo";
@@ -14,7 +15,7 @@ import { bbox, haversineM, locationBoost } from "@/lib/geo";
  *
  * Location only ever adds. Nobody drops off the list because of where you are.
  */
-export async function GET(req: Request) {
+export const GET = route(async (req: Request) => {
   const userId = await requireUser();
   const url = new URL(req.url);
   const lat = Number(url.searchParams.get("lat"));
@@ -68,7 +69,7 @@ export async function GET(req: Request) {
     slipping: ranked.filter((p) => !p.hereBecause && p.warmth < 55).slice(0, 5),
     threads: due.slice(0, 8),
   });
-}
+});
 
 async function nearby(userId: string, lat: number, lng: number) {
   const b = bbox(lat, lng, 1500);

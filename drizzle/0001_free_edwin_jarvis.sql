@@ -1,0 +1,1 @@
+ALTER TABLE "captures" ADD COLUMN "place_hint" text;

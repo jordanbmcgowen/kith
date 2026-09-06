@@ -262,9 +262,15 @@ export const captures = pgTable("captures", {
   transcript: text("transcript"),
   rawText: text("raw_text"),          // for typed captures
 
+  // Where the note is ABOUT, not where the phone was. The screen only sends
+  // coordinates when the user says "Here"; a note recorded at home about the
+  // golf club carries no coordinates and a placeHint instead.
   lat: doublePrecision("lat"),
   lng: doublePrecision("lng"),
   accuracyM: real("accuracy_m"),
+  // The place name the user typed, if any. The worker resolves it to a places
+  // row by name; with coordinates present it also names the place you are at.
+  placeHint: text("place_hint"),
   placeId: uuid("place_id").references(() => places.id, { onDelete: "set null" }),
 
   capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),

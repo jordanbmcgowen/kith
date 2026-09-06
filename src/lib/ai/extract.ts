@@ -11,8 +11,6 @@ import { z } from "zod";
  *      as a loose thread. Nothing the user said is ever thrown away.
  */
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-
 export const ExtractionSchema = z.object({
   people: z.array(z.object({
     matchedPersonId: z.string().nullable(),
@@ -47,6 +45,11 @@ export const ExtractionSchema = z.object({
 
 export type Extraction = z.infer<typeof ExtractionSchema>;
 
+/** Cheap and fast for a twenty second note. */
+export const EXTRACT_MODEL = "claude-haiku-4-5";
+/** One step up when the cheap model returns something malformed. */
+export const ESCALATE_MODEL = "claude-sonnet-5";
+
 export type Candidate = {
   id: string;
   displayName: string;
@@ -67,7 +70,7 @@ Rules:
 - A fact is something durable and true about the person: family, preferences, history, situation. "He seemed tired" is not a fact. "His mother is ill" is.
 - Kind "sensitive" is for things to handle with care: health, grief, subjects to avoid. Mark them so, do not omit them.
 - A thread is something the speaker owes or promised. Only create one if they actually committed. "I should probably call him" is a thread. "He should call me" is not.
-- Resolve relative dates ("Tuesday", "end of the month") against NOW, in the user's timezone, and return ISO 8601.
+- Resolve relative dates ("Tuesday", "end of the month") against NOW, in the user's timezone, and return ISO 8601. Look weekdays up in CALENDAR rather than computing them; "Friday" means the next Friday listed there.
 - If the note answers or completes an item in OPEN_THREADS, put that thread's id in closesThreadIds.
 - Write facts and summaries in the speaker's own voice and register. Do not formalise, do not add detail they did not say, do not editorialise.
 - Anything you cannot confidently attach to a person goes in unresolved, verbatim.
@@ -81,13 +84,23 @@ export async function extract(input: {
   placeName: string | null;
   candidates: Candidate[];
   openThreads: OpenThread[];
+  /** The next couple of weeks as "Sun Sep 6 (today), Mon Sep 7, ...", so weekdays are a lookup. */
+  dateContext?: string;
   model?: string;
 }): Promise<Extraction> {
-  const model = input.model ?? "claude-haiku-4-5";
+  const model = input.model ?? EXTRACT_MODEL;
+
+  // Built per call, not at module load. In a Worker, secrets are only
+  // guaranteed readable inside a request, and the SDK throws immediately when
+  // handed an empty key, which would take the whole consumer down before its
+  // first log line.
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
+  const anthropic = new Anthropic({ apiKey });
 
   const res = await anthropic.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8000,
     system: SYSTEM,
     tools: [{
       name: "file_note",
@@ -100,6 +113,7 @@ export async function extract(input: {
       content: [
         `NOW: ${input.now}`,
         `TIMEZONE: ${input.timezone}`,
+        ...(input.dateContext ? [`CALENDAR: ${input.dateContext}`] : []),
         `PLACE: ${input.placeName ?? "unknown"}`,
         ``,
         `CANDIDATES:`,
@@ -121,8 +135,8 @@ export async function extract(input: {
   if (!parsed.success) {
     // One escalation to a stronger model before giving up. Cheap insurance:
     // a malformed extraction means the user's note goes to needs_review.
-    if (model !== "claude-sonnet-4-5") {
-      return extract({ ...input, model: "claude-sonnet-4-5" });
+    if (model !== ESCALATE_MODEL) {
+      return extract({ ...input, model: ESCALATE_MODEL });
     }
     throw new Error(`Extraction failed validation: ${parsed.error.message}`);
   }

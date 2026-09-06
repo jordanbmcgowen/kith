@@ -32,26 +32,58 @@ work here:
 
 Built and reviewed:
 
-- `src/db/schema.ts` — the complete data model. Read this before anything else.
-- `src/db/index.ts` — tenant-scoped query helper.
-- `src/lib/auth.ts` — Auth.js + Google, including access token refresh.
-- `src/lib/ai/extract.ts` — the transcript-to-records model call. This is the
+- `src/db/schema.ts`: the complete data model. Read this before anything else.
+- `src/db/index.ts`: tenant-scoped query helper.
+- `src/lib/auth.ts`: Auth.js + Google, including access token refresh.
+- `src/lib/ai/extract.ts`: the transcript-to-records model call. This is the
   core of the product. Treat changes here as high stakes.
 - `src/lib/ai/transcribe.ts`, `embed.ts`
 - `src/lib/warmth.ts`, `src/lib/geo.ts`
 - `src/lib/google/contacts.ts`, `calendar.ts`
-- `src/app/api/v1/*` — captures, today, people, search, sync
-- `src/workers/process-capture.ts` — the queue consumer
-- `docs/SETUP.md` — the ordered account and deploy checklist
+- `src/app/api/v1/*`: captures, today, people, search, sync. Every handler
+  is wrapped in `route()` from `src/lib/api.ts`, which turns a signed-out
+  call into a 401 instead of an opaque 500.
+- `src/workers/process-capture.ts`: the queue consumer. Its three model
+  calls are injectable so `scripts/pipeline-check.ts` can run the whole
+  filing path against the real database with no keys. Run it after any
+  change to the worker: `npm run pipeline:check`.
+- `src/lib/audio.ts`: the one table mapping a browser's recording mime type
+  to the extension Whisper expects. Upload route and worker both use it.
+- `docs/SETUP.md`: the ordered account and deploy checklist
+
+Built, step 2 of the build order (record and upload):
+
+- `src/app/globals.css`: the design system, ported from the prototype.
+- `src/lib/store.ts`: the data seam described below. `DATA_SOURCE` is
+  `"live"`; the demo block exists for building later screens.
+- `src/lib/recorder.ts`: MediaRecorder with the browser's own container
+  plus an analyser for the waveform.
+- `src/components/CaptureScreen.tsx`: voice or typed/pasted note, upload,
+  retry without losing the note, and a status list that polls while a note
+  is moving through the pipeline. Lives at `/record`; `/` redirects there
+  when signed in.
+- Where a note happened is a three-way choice on that screen: **Here** sends
+  coordinates and an optional name for the place, **Somewhere else** sends a
+  typed name and no coordinates (most notes are recorded later, at home),
+  **No place** sends neither. `captures.lat/lng` therefore mean where the
+  note is about, never where the phone was. The typed name lands in
+  `captures.place_hint`; the worker matches it to a known place by name
+  (exact, then trigram) or creates one, and learns a place's coordinates the
+  first time it is named from there. Coordinates alone only become a place
+  through proximity to a known one, or through Google Places if
+  `GOOGLE_PLACES_KEY` is set on the processor, which it currently is not.
+- The extraction model gets NOW spelled out with the weekday and a two week
+  calendar, because it cannot reliably compute weekdays from an ISO
+  timestamp. "By Friday" was landing on Saturday before this.
 
 Not built yet:
 
-- The entire UI. No React components exist. There is a published visual
-  prototype; ask Jordan for the link before designing screens from scratch.
+- The confirmation screen (step 3), person detail, search, the tab bar.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
-- Any tests
+- The nightly cron does nothing yet: `scheduled()` is a stub so the trigger
+  has a handler.
 
 ## Build order
 
@@ -137,7 +169,8 @@ Hard rules. Breaking one of these is a bug, not a preference:
   one.
 - **Warmth is a 2px meter**, never a ring around an avatar.
 - Coral is reserved for overdue. Nothing else in the app may be that
-  saturated.
+  saturated. The prototype's stop button while recording is coral; the app
+  uses parchment there instead, on purpose, so this rule holds everywhere.
 - Every animation must answer a question the user is already asking. No
   ambience. All of it stops under `prefers-reduced-motion`.
 

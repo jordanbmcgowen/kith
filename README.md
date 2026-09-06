@@ -21,15 +21,22 @@ src/
   lib/ai/extract.ts       Claude -> structured records (the core of the product)
   lib/ai/embed.ts         embeddings for fuzzy recall
   lib/google/*.ts         Contacts and Calendar sync
+  lib/audio.ts            recording mime type -> the extension Whisper expects
+  lib/store.ts            the data seam: one constant picks demo or live
+  lib/recorder.ts         MediaRecorder + level meter, browser only
   app/api/v1/*            the API. versioned, so an Expo app can reuse it
+  app/record/             the capture screen (step 2 of the build order)
+  components/             CaptureScreen, Waveform, RecentCaptures, Shell
   workers/process-capture.ts   the queue consumer that ties it together
+scripts/
+  pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
 prototype/
   index.html              the interactive design reference. open it in a browser.
 ```
 
-The UI does not exist yet as React. `prototype/index.html` is the design
-reference and the shape to build toward, and it carries the demo-data seam
-described in `CLAUDE.md`.
+The capture screen exists as React. Everything after it (confirmation,
+person detail, search) is still only in `prototype/index.html`, which remains
+the design reference and carries the demo-data seam described in `CLAUDE.md`.
 
 ## The one idea worth protecting
 
