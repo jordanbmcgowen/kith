@@ -116,7 +116,13 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    or takes a typed or pasted note, and posts it with the phone's position to
    `/api/v1/captures`. Works in Safari on iOS as long as the page is HTTPS and
    the user taps. iOS records mp4 and Chrome records webm; the upload names
-   the file to match, so do not hardcode an extension anywhere.
+   the file to match, so do not hardcode an extension anywhere. The screen
+   asks where the note happened (Here, Somewhere else with a typed place, or
+   No place), because most notes get recorded later at home and the phone's
+   position would be wrong. Coordinates only turn into named places through
+   proximity to a place you have already named, or through Google Places if
+   you set `GOOGLE_PLACES_KEY` on the processor (`wrangler secret put
+   GOOGLE_PLACES_KEY --config wrangler.worker.jsonc`). Optional.
 2. **Watch the queue.** `npx wrangler tail kith-processor` while you record.
    You should see `[capture <id>] transcribe`, then `extract`, then `filed`
    (or `needs_review`). The Recent list on the record screen shows the same

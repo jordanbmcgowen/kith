@@ -74,6 +74,7 @@ function CaptureRow({ c, index }: { c: CaptureSummary; index: number }) {
           <span className={active ? "live" : undefined}>{LABEL[c.status]}</span>
           {c.durationSec != null && c.durationSec > 0 && <span>{fmtDuration(c.durationSec)}</span>}
           <span>{fmtWhen(c.capturedAt)}</span>
+          {c.placeHint && <span>at {c.placeHint}</span>}
           {filed && x && <span>{x.people.length} {x.people.length === 1 ? "person" : "people"} / {x.facts.length} {x.facts.length === 1 ? "fact" : "facts"}{x.unresolved.length ? ` / ${x.unresolved.length} loose` : ""}</span>}
         </span>
         {c.status === "failed" && c.error && <span className="role">{clip(c.error, 200)}</span>}

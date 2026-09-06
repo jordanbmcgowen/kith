@@ -9,6 +9,8 @@ import { audioExtension, storedContentType } from "@/lib/audio";
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 /** Typed notes. Generous, but a pasted novel is not a note. */
 const MAX_TEXT_CHARS = 20_000;
+/** A place name, not a paragraph. */
+const MAX_PLACE_CHARS = 120;
 
 /**
  * POST /api/v1/captures
@@ -21,7 +23,10 @@ const MAX_TEXT_CHARS = 20_000;
  * Accepts multipart form data with either:
  *   audio       a Blob from MediaRecorder (any browser's container)
  *   text        a typed or pasted note
- * plus optional lat, lng, accuracy (metres) and capturedAt (ISO 8601).
+ * plus optional lat, lng, accuracy (metres), capturedAt (ISO 8601) and place
+ * (a typed place name). Send coordinates only when the note is about where
+ * the phone is; a note about somewhere else sends a place name and no
+ * coordinates.
  *
  * Versioned under /v1 on purpose: the Expo app will call these same routes.
  */
@@ -35,6 +40,7 @@ export const POST = route(async (req: Request) => {
   const lng = num(form.get("lng"));
   const accuracyM = num(form.get("accuracy"));
   const capturedAt = when(form.get("capturedAt"));
+  const placeHint = str(form.get("place")).slice(0, MAX_PLACE_CHARS) || null;
 
   // A Blob without a filename is still a Blob. Checking `instanceof File`
   // here would silently turn a real recording into an empty text capture.
@@ -72,6 +78,7 @@ export const POST = route(async (req: Request) => {
     audioKey,
     rawText: text || null,
     lat, lng, accuracyM,
+    placeHint,
     capturedAt,
   });
 

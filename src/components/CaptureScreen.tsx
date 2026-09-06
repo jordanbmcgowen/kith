@@ -8,6 +8,14 @@ import { RecentCaptures } from "./RecentCaptures";
 
 type Stage = "idle" | "typing" | "recording" | "saving" | "failed";
 
+/**
+ * Where the note happened. "here" sends the phone's coordinates; "elsewhere"
+ * sends a typed name and no coordinates, because a note recorded at home
+ * about the golf club must not tag home; "none" sends neither.
+ */
+type PlaceMode = "here" | "elsewhere" | "none";
+const PLACE_LABELS: Record<PlaceMode, string> = { here: "Here", elsewhere: "Somewhere else", none: "No place" };
+
 /** A note that has been captured but not yet accepted by the server. Kept until it is. */
 type Pending = { audio?: Blob; text?: string; capturedAt: Date; durationMs: number };
 
@@ -34,6 +42,8 @@ export function CaptureScreen() {
   // undefined: still asking. null: unavailable or refused.
   const [coords, setCoords] = useState<Coords | null | undefined>(undefined);
   const [canRecord, setCanRecord] = useState(true);
+  const [placeMode, setPlaceMode] = useState<PlaceMode>("here");
+  const [placeName, setPlaceName] = useState("");
 
   const recorder = useRef<Recorder | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
@@ -100,7 +110,7 @@ export function CaptureScreen() {
     }
     await upload({ audio: blob, capturedAt: new Date(r.startedAt), durationMs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coords]);
+  }, [coords, placeMode, placeName]);
 
   /* ---- typed or pasted ---- */
   const submitText = async () => {
@@ -118,13 +128,20 @@ export function CaptureScreen() {
         audio: p.audio,
         filename: p.audio ? `note.${audioExtension(p.audio.type)}` : undefined,
         text: p.text,
-        coords: coords ?? null,
+        coords: placeMode === "here" ? coords ?? null : null,
+        placeName: placeMode === "none" ? undefined : placeName.trim() || undefined,
         capturedAt: p.capturedAt,
       });
       setPending(null);
       setText("");
+      // Keep the choice (a run of notes from the couch stays "Somewhere else"),
+      // drop the name: the next note is probably about a different place, and
+      // a wrong place is worse than retyping one.
+      setPlaceName("");
       setError(null);
-      setStage("idle");
+      // A typed note is usually one of several: stay in the box for the next
+      // one. A voice note returns to the microphone.
+      setStage(p.text ? "typing" : "idle");
       setRefreshKey((k) => k + 1);
       showToast("Saved. Filing it now.");
     } catch (e) {
@@ -174,7 +191,7 @@ export function CaptureScreen() {
             Type or paste it instead
           </button>
 
-          <LocationStrip coords={coords} />
+          <LocationChoice coords={coords} mode={placeMode} name={placeName} onMode={setPlaceMode} onName={setPlaceName} />
         </div>
       )}
 
@@ -198,7 +215,7 @@ export function CaptureScreen() {
             <button className="btn" disabled={!text.trim()} onClick={submitText}>File it</button>
             <button className="btn ghost" onClick={() => setStage("idle")}>Back to recording</button>
           </div>
-          <LocationStrip coords={coords} />
+          <LocationChoice coords={coords} mode={placeMode} name={placeName} onMode={setPlaceMode} onName={setPlaceName} />
         </div>
       )}
 
@@ -206,7 +223,7 @@ export function CaptureScreen() {
         <div className="cap rec">
           <div className="fade">
             <h1 className="h1" style={{ marginTop: 14 }}>Listening</h1>
-            <p className="stamp" style={{ marginTop: 10 }}>{placeLabel(coords)} / {stamp(new Date())}</p>
+            <p className="stamp" style={{ marginTop: 10 }}>{placeLabel(placeMode, placeName, coords)} / {stamp(new Date())}</p>
           </div>
           <div>
             <Waveform recorder={recorder.current} />
@@ -251,26 +268,54 @@ export function CaptureScreen() {
 }
 
 /**
- * Where this note will be tagged. There is no place name yet: that is the
- * worker's job, and it only exists once a place has been seen. What the
- * phone can honestly say is whether it has a fix and how tight it is.
+ * Where this happened. Three text choices with the underline, never chips.
+ * "Here" is the default and shows whether the phone has a fix; the optional
+ * name teaches Kith what this place is called. "Somewhere else" is for the
+ * note you record later, on the couch, about the club.
  */
-function LocationStrip({ coords }: { coords: Coords | null | undefined }) {
+function LocationChoice({ coords, mode, name, onMode, onName }: {
+  coords: Coords | null | undefined;
+  mode: PlaceMode;
+  name: string;
+  onMode: (m: PlaceMode) => void;
+  onName: (n: string) => void;
+}) {
   const searching = coords === undefined;
   const off = coords === null;
   return (
-    <div className="geo anim" style={style(4, { margin: 0 })}>
-      <span className={`locator${searching ? " searching" : ""}${off ? " off" : ""}`}><span /><span /><b /></span>
-      <div style={{ flex: 1 }}>
-        <div className="geo-name" style={{ fontSize: 16 }}>
-          {searching ? "Finding you" : off ? "Location off" : "Location on"}
-        </div>
-        <div className="lede" style={{ marginTop: 4 }}>
-          {searching && "Asking the phone where you are."}
-          {off && "This note will be filed without a place. Allow location for Kith to tag where you were."}
-          {coords && `This note will be tagged here${coords.accuracy ? `, within ${Math.round(coords.accuracy)} m` : ""}.`}
-        </div>
+    <div className="place anim" style={style(4, { margin: 0 })}>
+      <div className="tabs" role="group" aria-label="Where this happened">
+        {(Object.keys(PLACE_LABELS) as PlaceMode[]).map((m) => (
+          <button key={m} type="button" aria-pressed={mode === m} onClick={() => onMode(m)}>{PLACE_LABELS[m]}</button>
+        ))}
       </div>
+
+      {mode === "here" && (
+        <div className="place-here">
+          <span className={`locator${searching ? " searching" : ""}${off ? " off" : ""}`}><span /><span /><b /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="lede">
+              {searching && "Asking the phone where you are."}
+              {off && "Location is off. Allow it for withkith.app, or choose Somewhere else and type the place."}
+              {coords && `Tagged where you are now${coords.accuracy ? `, within ${Math.round(coords.accuracy)} m` : ""}.`}
+            </div>
+            <label className="field">
+              <input value={name} onChange={(e) => onName(e.target.value)} placeholder="Name this place (optional)" maxLength={120} autoComplete="off" />
+            </label>
+          </div>
+        </div>
+      )}
+
+      {mode === "elsewhere" && (
+        <div>
+          <label className="field">
+            <input value={name} onChange={(e) => onName(e.target.value)} placeholder="Where did this happen?" maxLength={120} autoComplete="off" autoFocus />
+          </label>
+          <div className="lede" style={{ marginTop: 8 }}>Type the place and Kith remembers it. Leave it blank and the note is filed without one.</div>
+        </div>
+      )}
+
+      {mode === "none" && <div className="lede">Filed without a place.</div>}
     </div>
   );
 }
@@ -284,7 +329,10 @@ function micProblem(e: unknown): string {
   return `Couldn't start the microphone (${e instanceof Error ? e.message : String(e)}). Type the note instead.`;
 }
 
-const placeLabel = (c: Coords | null | undefined) => (c ? "Located" : c === null ? "No location" : "Locating");
+const placeLabel = (mode: PlaceMode, name: string, c: Coords | null | undefined) =>
+  mode === "none" ? "No place"
+  : mode === "elsewhere" ? (name.trim() || "Somewhere else")
+  : c ? (name.trim() || "Here") : c === null ? "No location" : "Locating";
 
 function fmtElapsed(ms: number) {
   const s = Math.floor(ms / 1000);

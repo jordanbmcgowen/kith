@@ -22,6 +22,8 @@ export type CaptureSummary = {
   rawText: string | null;
   durationSec: number | null;
   capturedAt: string;
+  /** The place name the user typed, if any. */
+  placeHint: string | null;
   error: string | null;
   extraction: { people: { name: string }[]; facts: unknown[]; threads: unknown[]; unresolved: string[] } | null;
   _demo?: true;
@@ -34,7 +36,11 @@ export type CaptureInput = {
   /** Must carry the extension that matches the blob's type. See src/lib/audio.ts. */
   filename?: string;
   text?: string;
+  /** Only when the note is about where the phone is right now. A note recorded
+   *  at home about somewhere else sends null here and a placeName instead. */
   coords: Coords | null;
+  /** Where this happened, in the user's words. Optional. */
+  placeName?: string;
   capturedAt: Date;
 };
 
@@ -59,14 +65,14 @@ export class ApiError extends Error {
 const DEMO_CAPTURES: CaptureSummary[] = [
   {
     _demo: true, id: "demo-1", kind: "voice", status: "filed", durationSec: 18, error: null,
-    capturedAt: new Date(Date.now() - 40 * 60_000).toISOString(),
+    capturedAt: new Date(Date.now() - 40 * 60_000).toISOString(), placeHint: "Brook Hollow",
     transcript: "Just saw Marcus at the club. Priya got into Rice, early decision. Told him I'd send the Cirrus article this week.",
     rawText: null,
     extraction: { people: [{ name: "Marcus Ellery" }], facts: [{}, {}], threads: [{}], unresolved: [] },
   },
   {
     _demo: true, id: "demo-2", kind: "text", status: "needs_review", durationSec: null, error: null,
-    capturedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+    capturedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), placeHint: null,
     transcript: null,
     rawText: "Met a Dev at the roaster in Bishop Arts, neighbor, said his kid starts at Lakewood this fall.",
     extraction: { people: [{ name: "Dev" }], facts: [{}], threads: [], unresolved: [] },
@@ -81,6 +87,7 @@ const demoStore: Store = {
     const row: CaptureSummary = {
       _demo: true, id, kind: input.audio ? "voice" : "text", status: "uploaded",
       durationSec: input.audio ? 14 : null, error: null, capturedAt: input.capturedAt.toISOString(),
+      placeHint: input.placeName?.trim() || null,
       transcript: null, rawText: input.text ?? null, extraction: null,
     };
     DEMO_CAPTURES.unshift(row);
@@ -143,6 +150,7 @@ const liveStore: Store = {
       form.append("lng", String(input.coords.lng));
       if (input.coords.accuracy != null) form.append("accuracy", String(input.coords.accuracy));
     }
+    if (input.placeName?.trim()) form.append("place", input.placeName.trim());
     form.append("capturedAt", input.capturedAt.toISOString());
     return api("/api/v1/captures", { method: "POST", body: form });
   },

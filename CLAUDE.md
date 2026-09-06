@@ -58,10 +58,23 @@ Built, step 2 of the build order (record and upload):
   `"live"`; the demo block exists for building later screens.
 - `src/lib/recorder.ts`: MediaRecorder with the browser's own container
   plus an analyser for the waveform.
-- `src/components/CaptureScreen.tsx`: voice or typed/pasted note, location,
-  upload, retry without losing the note, and a status list that polls while
-  a note is moving through the pipeline. Lives at `/record`; `/` redirects
-  there when signed in.
+- `src/components/CaptureScreen.tsx`: voice or typed/pasted note, upload,
+  retry without losing the note, and a status list that polls while a note
+  is moving through the pipeline. Lives at `/record`; `/` redirects there
+  when signed in.
+- Where a note happened is a three-way choice on that screen: **Here** sends
+  coordinates and an optional name for the place, **Somewhere else** sends a
+  typed name and no coordinates (most notes are recorded later, at home),
+  **No place** sends neither. `captures.lat/lng` therefore mean where the
+  note is about, never where the phone was. The typed name lands in
+  `captures.place_hint`; the worker matches it to a known place by name
+  (exact, then trigram) or creates one, and learns a place's coordinates the
+  first time it is named from there. Coordinates alone only become a place
+  through proximity to a known one, or through Google Places if
+  `GOOGLE_PLACES_KEY` is set on the processor, which it currently is not.
+- The extraction model gets NOW spelled out with the weekday and a two week
+  calendar, because it cannot reliably compute weekdays from an ISO
+  timestamp. "By Friday" was landing on Saturday before this.
 
 Not built yet:
 

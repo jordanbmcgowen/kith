@@ -10,7 +10,7 @@
  * nodejs_compat is on and the compatibility date is 2025-04-01 or later.
  * Both are set in wrangler.worker.jsonc.
  */
-import { db, captures, people, facts, interactions, threads, places, personPlaces, looseThreads } from "../db";
+import { db, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads } from "../db";
 import { transcribe } from "../lib/ai/transcribe";
 import { extract, AUTO_FILE_THRESHOLD, type Candidate } from "../lib/ai/extract";
 import { embed } from "../lib/ai/embed";
@@ -90,6 +90,15 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
     limit: 500,
   });
 
+  // The user's own timezone and cadences. Multi-tenant from day one means
+  // nothing about Dallas is allowed to be hardcoded here.
+  const prefs = await db().query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { timezone: true, cadenceDefaults: true },
+  });
+  const timezone = prefs?.timezone ?? "America/Chicago";
+  const cadenceDefaults = prefs?.cadenceDefaults ?? { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
+
   /* 1. transcribe ------------------------------------------------------- */
   // A retry after a successful transcription must reuse it, not start from
   // rawText, which is empty for a voice note.
@@ -122,9 +131,14 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
   if (!transcript.trim()) throw new PermanentError("Empty transcript. Nothing was said, or the microphone was muted.");
 
   /* 2. resolve place ---------------------------------------------------- */
-  const place = capture.lat != null && capture.lng != null
-    ? await resolvePlace(userId, capture.lat, capture.lng, env)
-    : null;
+  // A typed place name wins. Coordinates alone mean "I am there now" and go
+  // through proximity matching (then Google, if a key is set). No hint and
+  // no coordinates means the note is filed without a place.
+  const place = capture.placeHint
+    ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng)
+    : capture.lat != null && capture.lng != null
+      ? await resolvePlace(userId, capture.lat, capture.lng, env)
+      : null;
 
   /* 3. extract ---------------------------------------------------------- */
   console.log(`[capture ${captureId}] extract (${roster.length} candidates, place: ${place?.name ?? "none"})`);
@@ -152,8 +166,12 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
 
   const result = await models.extract({
     transcript,
-    now: capture.capturedAt.toISOString(),
-    timezone: "America/Chicago",
+    // Weekday and local time spelled out, plus a two week calendar. Models
+    // resolve "by Friday" reliably when they can look the date up and
+    // unreliably when they have to compute it from an ISO timestamp.
+    now: describeNow(capture.capturedAt, timezone),
+    timezone,
+    dateContext: upcomingDays(capture.capturedAt, timezone, 14),
     placeName: place?.name ?? null,
     candidates,
     openThreads: open.map((t) => ({
@@ -209,7 +227,8 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
       userId, personId: nameToId.get(i.personName)!, captureId,
       placeId: place?.id ?? null,
       occurredAt: safeDate(i.occurredAt, capture.capturedAt), channel: i.channel,
-      summary: i.summary, lat: capture.lat, lng: capture.lng,
+      // The place's coordinates when it has them, else the note's own.
+      summary: i.summary, lat: place?.lat ?? capture.lat, lng: place?.lng ?? capture.lng,
       embedding: null as number[] | null,
     }));
 
@@ -251,7 +270,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
       updatedAt: new Date(),
       warmth: warmth({
         lastInteractionAt: capture.capturedAt,
-        cadenceDays: person ? cadenceFor(person, { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 }) : 45,
+        cadenceDays: person ? cadenceFor(person, cadenceDefaults) : 45,
         interactionsLast90: Number(recent[0]?.n ?? 0),
       }),
     }).where(eq(people.id, personId));
@@ -282,6 +301,61 @@ function safeDate(iso: string, fallback: null): Date | null;
 function safeDate(iso: string, fallback: Date | null): Date | null {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? fallback : d;
+}
+
+/** "Sunday, September 6, 2026 at 4:35 PM CDT (2026-09-06T21:35:16.196Z)" */
+function describeNow(d: Date, timeZone: string): string {
+  const human = d.toLocaleString("en-US", {
+    timeZone, weekday: "long", year: "numeric", month: "long", day: "numeric",
+    hour: "numeric", minute: "2-digit", timeZoneName: "short",
+  });
+  return `${human} (${d.toISOString()})`;
+}
+
+/** "Sun Sep 6 (today), Mon Sep 7 (tomorrow), Tue Sep 8, ..." for the next n days. */
+function upcomingDays(d: Date, timeZone: string, n: number): string {
+  const out: string[] = [];
+  for (let i = 0; i <= n; i++) {
+    const day = new Date(d.getTime() + i * 86_400_000);
+    const label = day.toLocaleDateString("en-US", { timeZone, weekday: "short", month: "short", day: "numeric" });
+    out.push(i === 0 ? `${label} (today)` : i === 1 ? `${label} (tomorrow)` : label);
+  }
+  return out.join(", ");
+}
+
+/**
+ * The user typed where this happened. Match it to a place they already have,
+ * case-insensitively and then by trigram similarity so "Brook Hollow" finds
+ * "Brook Hollow Golf Club", or create it. If they typed a name while standing
+ * there (coordinates present) and the place had none, learn them: from then
+ * on plain "Here" matches it by proximity.
+ */
+async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null) {
+  const name = hint.trim().replace(/\s+/g, " ");
+  if (!name) return null;
+
+  const exact = sql`lower(${places.name}) = lower(${name})`;
+  const similar = sql`similarity(${places.name}, ${name})`;
+  const [hit] = await db().select({ place: places })
+    .from(places)
+    .where(and(eq(places.userId, userId), sql`(${exact} or ${similar} > 0.45)`))
+    .orderBy(sql`${exact} desc`, sql`${similar} desc`)
+    .limit(1);
+
+  if (hit) {
+    const learn = lat != null && lng != null && hit.place.lat == null;
+    await db().update(places).set({
+      visitCount: sql`${places.visitCount} + 1`,
+      lastVisitedAt: new Date(),
+      ...(learn ? { lat, lng } : {}),
+    }).where(eq(places.id, hit.place.id));
+    return learn ? { ...hit.place, lat, lng } : hit.place;
+  }
+
+  const [row] = await db().insert(places).values({
+    userId, name, kind: "other", lat, lng, visitCount: 1, lastVisitedAt: new Date(),
+  }).returning();
+  return row;
 }
 
 /**

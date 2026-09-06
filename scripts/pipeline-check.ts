@@ -33,6 +33,7 @@ function check(label: string, ok: boolean, detail?: unknown) {
   if (!ok) failures++;
 }
 
+/** Fixture coordinates sit in the South Pacific so a proximity match can never touch a real place. */
 /** Deterministic unit vector so the vector() column gets exercised for real. */
 const fakeVector = (seed: number) => {
   const v = Array.from({ length: DIM }, (_, i) => Math.sin(seed * 7 + i));
@@ -40,9 +41,10 @@ const fakeVector = (seed: number) => {
   return v.map((x) => x / n);
 };
 
+let lastExtractInput: Parameters<Models["extract"]>[0] | null = null;
 const models = (extraction: Extraction, transcript = "stub transcript"): Models => ({
   transcribe: async () => ({ text: transcript, durationSec: 12.5 }),
-  extract: async () => extraction,
+  extract: async (input) => { lastExtractInput = input; return extraction; },
   embed: async (texts) => texts.map((_, i) => fakeVector(i + 1)),
 });
 
@@ -92,14 +94,14 @@ async function main() {
       userId, personId: marcus.id, title: `${MARK} send Marcus the Cirrus article`,
     }).returning();
     const [club] = await db().insert(places).values({
-      userId, name: `${MARK} Brook Hollow Golf Club`, lat: 32.8580, lng: -96.8420, radiusM: 200, visitCount: 3,
+      userId, name: `${MARK} Brook Hollow Golf Club`, lat: -45.0000, lng: -130.0000, radiusM: 200, visitCount: 3,
     }).returning();
 
     /* ---- 1. a typed note, filed clean ---- */
     const [c1] = await db().insert(captures).values({
       userId, kind: "text", status: "uploaded",
       rawText: `${MARK} Just saw Marcus at the club. His daughter Priya got into Rice, early decision. I told him I'd send the Cirrus article this week. Also met a guy named Dev Patel who runs a coffee roaster in Bishop Arts, he's a neighbor. Someone mentioned a birthday on the 14th but I missed whose.`,
-      lat: 32.8582, lng: -96.8418, accuracyM: 12, capturedAt: new Date(),
+      lat: -45.0002, lng: -130.0002, accuracyM: 12, capturedAt: new Date(),
     }).returning();
 
     const extraction1: Extraction = {
@@ -163,6 +165,7 @@ async function main() {
 
     const pp = await db().select().from(personPlaces).where(eq(personPlaces.placeId, club.id));
     check("person_places linked for both people", pp.length === 2, pp.length);
+    check("model was given NOW with a weekday and a calendar", /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day, /.test(lastExtractInput?.now ?? "") && /\(today\), .*\(tomorrow\)/.test(lastExtractInput?.dateContext ?? ""), { now: lastExtractInput?.now, cal: lastExtractInput?.dateContext?.slice(0, 60) });
 
     /* ---- 2. re-run the same capture: the upsert path must not blow up ---- */
     console.log("\n2. same capture processed again (what a queue retry looks like)");
@@ -201,6 +204,60 @@ async function main() {
     }));
     const after4 = await db().query.captures.findFirst({ where: eq(captures.id, c4.id) });
     check("status is needs_review", after4?.status === "needs_review", after4?.status);
+
+    /* ---- 6. a typed place name finds an existing place, fuzzily ---- */
+    console.log("\n6. typed place, lowercase and partial, matches the known club");
+    const [c6] = await db().insert(captures).values({
+      userId, kind: "text", status: "uploaded", rawText: `${MARK} saw Marcus at the club`,
+      placeHint: "pipeline check brook hollow", lat: -45.0002, lng: -130.0002, capturedAt: new Date(),
+    }).returning();
+    await processCapture({ captureId: c6.id, userId }, env, models({
+      people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.97, isNew: false }],
+      facts: [], interactions: [{ personName: "Marcus", summary: "Saw him at the club", occurredAt: new Date().toISOString(), channel: "in_person" }],
+      threads: [], closesThreadIds: [], unresolved: [], place: null,
+    }));
+    const after6 = await db().query.captures.findFirst({ where: eq(captures.id, c6.id) });
+    check("resolved to the existing club by name, no new place", after6?.placeId === club.id, after6?.placeId);
+    const placesNow = await db().select().from(places).where(and(eq(places.userId, userId), like(places.name, `${MARK}%`)));
+    check("still exactly one place row", placesNow.length === 1, placesNow.map((p) => p.name));
+
+    /* ---- 7. a new typed place, recorded from the couch: no coordinates ---- */
+    console.log("\n7. new typed place with no coordinates (delayed note from home)");
+    const [c7] = await db().insert(captures).values({
+      userId, kind: "text", status: "uploaded", rawText: `${MARK} dinner at Alex's parents`,
+      placeHint: `${MARK} Alex's Parents`, capturedAt: new Date(),
+    }).returning();
+    await processCapture({ captureId: c7.id, userId }, env, models({
+      people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.97, isNew: false }],
+      facts: [], interactions: [{ personName: "Marcus", summary: "Dinner", occurredAt: new Date().toISOString(), channel: "in_person" }],
+      threads: [], closesThreadIds: [], unresolved: [], place: null,
+    }));
+    const parents = await db().query.places.findFirst({ where: and(eq(places.userId, userId), eq(places.name, `${MARK} Alex's Parents`)) });
+    check("new place created from the typed name", !!parents, parents);
+    check("new place has no coordinates", parents?.lat == null && parents?.lng == null);
+    const ix7 = await db().select().from(interactions).where(eq(interactions.captureId, c7.id));
+    check("interaction tagged with the new place and no coordinates", ix7[0]?.placeId === parents?.id && ix7[0]?.lat == null);
+
+    /* ---- 8. naming the place you are at teaches its coordinates ---- */
+    console.log("\n8. 'Here' with a name learns where the place is, then plain GPS finds it");
+    const [c8] = await db().insert(captures).values({
+      userId, kind: "text", status: "uploaded", rawText: `${MARK} at the range`,
+      placeHint: `${MARK} Alex's Parents`, lat: -46.0000, lng: -131.0000, capturedAt: new Date(),
+    }).returning();
+    await processCapture({ captureId: c8.id, userId }, env, models({
+      people: [], facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
+    }));
+    const learned = await db().query.places.findFirst({ where: eq(places.id, parents!.id) });
+    check("existing place learned coordinates from a visit there", learned?.lat === -46 && learned?.lng === -131, [learned?.lat, learned?.lng]);
+    const [c8b] = await db().insert(captures).values({
+      userId, kind: "text", status: "uploaded", rawText: `${MARK} back at the range, no name typed`,
+      lat: -46.0003, lng: -131.0002, capturedAt: new Date(),
+    }).returning();
+    await processCapture({ captureId: c8b.id, userId }, env, models({
+      people: [], facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
+    }));
+    const after8b = await db().query.captures.findFirst({ where: eq(captures.id, c8b.id) });
+    check("coordinates alone now match the learned place", after8b?.placeId === parents?.id, after8b?.placeId);
 
     /* ---- 5. silence is a permanent failure, not three retries ---- */
     console.log("\n5. empty transcript");
