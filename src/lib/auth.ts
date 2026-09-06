@@ -37,6 +37,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "database" },
   providers: [
     Google({
+      // Trimmed on purpose. A secret pasted into the Cloudflare dashboard with
+      // a trailing space reaches us intact, and Google answers "OAuth client
+      // was not found" for an id that ends in a space. That has happened.
+      clientId: process.env.AUTH_GOOGLE_ID?.trim(),
+      clientSecret: process.env.AUTH_GOOGLE_SECRET?.trim(),
       authorization: {
         params: {
           scope: GOOGLE_SCOPES,
@@ -85,8 +90,8 @@ export async function googleAccessToken(userId: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: process.env.AUTH_GOOGLE_ID!,
-      client_secret: process.env.AUTH_GOOGLE_SECRET!,
+      client_id: process.env.AUTH_GOOGLE_ID!.trim(),
+      client_secret: process.env.AUTH_GOOGLE_SECRET!.trim(),
       grant_type: "refresh_token",
       refresh_token: acct.refresh_token,
     }),
