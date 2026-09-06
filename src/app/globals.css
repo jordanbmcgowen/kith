@@ -1,0 +1,278 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   Kith app styles. Ported from prototype/index.html, which remains the
+   source of truth for the visual system. One committed palette: pine ground,
+   parchment type, gold voice. Coral means overdue and nothing else.
+
+   Hard rules (breaking one is a bug):
+     no cards, no fills behind content, no colored left rails
+     border-radius 0 everywhere except the record and mic buttons
+     no pill chips; filters are text with an underline
+     warmth is a 2px meter, never a ring
+     every animation answers a question; all of it stops under reduced motion
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --ground:#0A1512;
+  --raise:#0F1E1A;
+  --rule:#1B2F2A;
+  --rule-2:#294740;
+  --text:#F1EADC;
+  --text-2:#8CA69B;
+  --text-3:#587068;
+
+  --gold:#E8B33F;      /* the app's own voice: live, matched, primary action */
+  --alert:#FF6B4A;     /* overdue. nothing else, ever. */
+
+  --clay:#C9856B;      /* family    */
+  --verdigris:#4FB39E; /* friends   */
+  --sky:#6D9FD8;       /* work      */
+  --wisteria:#B58AD4;  /* neighbors */
+
+  --serif:"Fraunces",Georgia,serif;
+  --sans:"Schibsted Grotesk","Helvetica Neue",Arial,sans-serif;
+  --mono:"DM Mono",ui-monospace,SFMono-Regular,monospace;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box;}
+html{background:var(--ground);}
+body{
+  margin:0;background:var(--ground);color:var(--text);
+  font-family:var(--sans);font-size:16px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;
+}
+h1,h2,h3,h4,p{margin:0;}
+h1,h2,h3,h4{text-wrap:balance;}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer;border-radius:0;}
+a{color:inherit;}
+:focus-visible{outline:2px solid var(--gold);outline-offset:3px;}
+
+/* ─────────────────────────────── app shell ──────────────────────────────── */
+.app{
+  min-height:100dvh;max-width:560px;margin:0 auto;
+  display:flex;flex-direction:column;position:relative;
+}
+.bar{
+  flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;
+  padding:calc(13px + env(safe-area-inset-top,0px)) 22px 4px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-3);
+}
+.demo-flag{
+  font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;
+  color:var(--ground);background:var(--gold);padding:2px 6px;
+}
+.view{flex:1;padding:4px 20px calc(26px + env(safe-area-inset-bottom,0px));}
+
+/* ─────────────────────────── app type & rhythm ──────────────────────────── */
+.h1{font-family:var(--serif);font-optical-sizing:auto;font-weight:400;font-size:31px;letter-spacing:-.025em;line-height:1.08;}
+.h1 em{font-style:italic;color:var(--gold);}
+.stamp{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--text-3);}
+.lede{font-size:13.5px;line-height:1.6;color:var(--text-2);}
+.mono{font-family:var(--mono);}
+
+.block{margin-top:30px;}
+.label{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--text-3);display:flex;align-items:center;gap:12px;margin-bottom:4px;
+}
+.label::after{content:"";flex:1;height:1px;background:var(--rule);}
+.label .n{color:var(--gold);}
+
+/* Ruled list. No cards, no fills, no radius. The rule does the separating. */
+.list{display:flex;flex-direction:column;}
+.row{
+  display:flex;gap:14px;align-items:flex-start;width:100%;text-align:left;
+  padding:16px 0;border-bottom:1px solid var(--rule);
+  transition:background .2s ease, padding-left .2s ease;
+}
+.row:last-child{border-bottom:none;}
+button.row:hover{background:var(--raise);padding-left:6px;}
+button.row:active{background:var(--rule);}
+
+/* ───────────────────────────── marks & meters ───────────────────────────── */
+.mark{
+  flex:0 0 auto;width:40px;height:40px;display:grid;place-items:center;
+  font-family:var(--serif);font-weight:600;font-size:14px;
+  color:var(--ground);background:var(--c,var(--text-2));
+}
+.mark.lg{width:76px;height:76px;font-size:27px;}
+.body{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;}
+.nm{font-weight:600;font-size:15.5px;letter-spacing:-.012em;line-height:1.2;}
+.nm.big{font-family:var(--serif);font-weight:400;font-size:21px;letter-spacing:-.02em;}
+.say{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;color:var(--gold);}
+.role{font-size:12.5px;color:var(--text-2);line-height:1.45;}
+.recall{font-size:13px;line-height:1.55;color:var(--text);}
+.recall em{font-style:italic;font-family:var(--serif);}
+.meta{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-3);display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+}
+.meta .live{color:var(--gold);}
+.sq{width:6px;height:6px;background:var(--c,var(--text-3));display:inline-block;flex:0 0 auto;}
+
+/* Warmth: a hairline meter, not a ring. Fills on mount. */
+.meter{display:block;width:64px;height:2px;background:var(--rule-2);position:relative;overflow:hidden;}
+.meter i{
+  position:absolute;inset:0 auto 0 0;background:var(--c,var(--text-2));
+  width:calc(var(--v) * 1%);transform-origin:left;
+}
+@media (prefers-reduced-motion:no-preference){
+  .meter i{animation:fill .7s cubic-bezier(.2,.85,.25,1) backwards;animation-delay:.15s;}
+}
+@keyframes fill{from{transform:scaleX(0);}to{transform:scaleX(1);}}
+
+/* ─────────────────────────── location strip ────────────────────────────── */
+.geo{
+  border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule);
+  padding:15px 0;margin-top:18px;display:flex;gap:14px;align-items:flex-start;
+}
+.locator{flex:0 0 auto;width:22px;height:22px;position:relative;margin-top:2px;}
+.locator span{position:absolute;inset:0;border:1px solid var(--gold);border-radius:50%;opacity:0;}
+.locator b{position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;background:var(--gold);border-radius:50%;}
+.locator.off b{background:var(--text-3);}
+/* The rings ping only while a fix is being acquired: "is it finding me?" */
+@media (prefers-reduced-motion:no-preference){
+  .locator.searching span{animation:ping 2.8s cubic-bezier(.2,.7,.3,1) infinite;}
+  .locator.searching span:nth-child(2){animation-delay:1.4s;}
+}
+@keyframes ping{0%{transform:scale(.25);opacity:.9;}70%{opacity:0;}100%{transform:scale(1);opacity:0;}}
+.geo-name{font-family:var(--serif);font-weight:400;font-size:19px;letter-spacing:-.02em;}
+
+/* ───────────────────────────── thread rows ─────────────────────────────── */
+.thread{display:flex;gap:14px;align-items:flex-start;padding:15px 0;border-bottom:1px solid var(--rule);transition:opacity .3s ease;}
+.thread:last-child{border-bottom:none;}
+.box{
+  flex:0 0 auto;width:17px;height:17px;border:1px solid var(--text-3);margin-top:2px;
+  display:grid;place-items:center;transition:border-color .2s,background .2s;
+}
+.tt{font-size:14.5px;line-height:1.45;}
+.tmeta{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);margin-top:7px;display:flex;gap:11px;align-items:center;flex-wrap:wrap;}
+.tmeta .late{color:var(--alert);}
+.dot-late{width:5px;height:5px;background:var(--alert);border-radius:50%;flex:0 0 auto;}
+
+/* ─────────────────────── loose threads: spoken fragments ────────────────── */
+.loose{padding:15px 0;border-bottom:1px solid var(--rule);}
+.loose:last-child{border-bottom:none;}
+.loose q{font-family:var(--serif);font-style:italic;font-weight:300;font-size:15.5px;line-height:1.5;color:var(--text);quotes:'\201C' '\201D';}
+
+/* ───────────────────────────── underline tabs ──────────────────────────── */
+.tabs{display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--rule);}
+.tabs::-webkit-scrollbar{display:none;}
+.tabs button{flex:0 0 auto;padding:0 0 11px;font-size:13px;color:var(--text-3);position:relative;transition:color .2s ease;white-space:nowrap;}
+.tabs button::after{
+  content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--gold);
+  transform:scaleX(0);transform-origin:left;transition:transform .28s cubic-bezier(.2,.9,.25,1);
+}
+.tabs button[aria-pressed="true"]{color:var(--text);font-weight:600;}
+.tabs button[aria-pressed="true"]::after{transform:scaleX(1);}
+
+/* ──────────────────────────────── capture ──────────────────────────────── */
+.cap{display:flex;flex-direction:column;gap:18px;padding-top:10px;}
+.wave{display:block;width:100%;height:96px;}
+.recwrap{position:relative;width:112px;height:112px;margin:0 auto;}
+.recwrap i{position:absolute;inset:0;border:1px solid var(--gold);border-radius:50%;opacity:0;}
+/* The rings ping only while recording: "is it live?" */
+@media (prefers-reduced-motion:no-preference){
+  .rec .recwrap i{animation:ping 2.2s cubic-bezier(.2,.7,.3,1) infinite;}
+  .rec .recwrap i:nth-child(2){animation-delay:1.1s;}
+}
+.recbtn{
+  position:absolute;inset:0;border-radius:50%;background:var(--gold);color:var(--ground);
+  display:grid;place-items:center;transition:transform .22s cubic-bezier(.2,1.4,.4,1),background .22s,color .22s;
+}
+/* Parchment while live, not coral: coral is reserved for overdue. */
+.rec .recbtn{background:var(--text);color:var(--ground);}
+.recbtn:active{transform:scale(.93);}
+.recbtn:disabled{opacity:.4;cursor:default;}
+.timer{font-family:var(--mono);font-size:12.5px;letter-spacing:.22em;color:var(--gold);text-align:center;text-transform:uppercase;font-variant-numeric:tabular-nums;}
+.timer.quiet{color:var(--text-3);}
+
+.script{
+  border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule);padding:16px 0;
+  font-size:14.5px;line-height:1.65;min-height:104px;
+}
+.caret{display:inline-block;width:2px;height:15px;background:var(--gold);vertical-align:-2px;margin-left:1px;}
+@media (prefers-reduced-motion:no-preference){.caret{animation:blink 1.05s steps(1) infinite;}}
+@keyframes blink{0%,49%{opacity:1;}50%,100%{opacity:0;}}
+
+/* Typed notes. The same ruled block as the transcript, but you write in it. */
+.note{
+  display:block;width:100%;min-height:160px;resize:vertical;
+  background:none;border:none;border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule);
+  padding:16px 0;color:var(--text);font:inherit;font-size:15px;line-height:1.65;border-radius:0;
+}
+.note::placeholder{color:var(--text-3);}
+.note:focus{outline:none;border-bottom-color:var(--gold);}
+
+.ex{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--rule);align-items:flex-start;}
+.ex:last-of-type{border-bottom:none;}
+.ex-k{flex:0 0 66px;font-family:var(--mono);font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-3);padding-top:4px;}
+.ex-v{flex:1;display:flex;flex-wrap:wrap;gap:7px;}
+.tag{border:1px solid var(--rule-2);padding:5px 9px;font-size:12px;line-height:1.35;color:var(--text-2);}
+.tag.new{border-color:var(--gold);color:var(--gold);}
+
+.btn{
+  display:block;width:100%;text-align:center;padding:15px;background:var(--gold);color:var(--ground);
+  font-weight:700;font-size:14.5px;letter-spacing:-.01em;transition:filter .18s,transform .18s,opacity .18s;
+}
+.btn:hover{filter:brightness(1.08);}
+.btn:active{transform:scale(.99);}
+.btn:disabled{opacity:.45;cursor:default;filter:none;transform:none;}
+.btn.ghost{background:none;border:1px solid var(--rule-2);color:var(--text-2);font-weight:500;}
+.link{font-size:13px;color:var(--text-2);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--rule-2);}
+.link:hover{color:var(--text);}
+.actions{display:flex;flex-direction:column;gap:10px;}
+
+/* ──────────────────────────────── search ──────────────────────────────── */
+.field{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid var(--rule-2);position:relative;}
+.field::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--gold);transform:scaleX(0);transform-origin:left;transition:transform .3s cubic-bezier(.2,.9,.25,1);}
+.field:focus-within::after{transform:scaleX(1);}
+.field input{flex:1;background:none;border:none;color:var(--text);font:inherit;font-size:15px;min-width:0;}
+.field input::placeholder{color:var(--text-3);}
+.why{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--verdigris);line-height:1.7;padding:10px 0 2px;}
+.empty{text-align:center;color:var(--text-3);font-size:13.5px;padding:44px 16px;line-height:1.7;}
+.empty em{font-family:var(--serif);font-style:italic;color:var(--text-2);}
+
+/* ──────────────────────────────── tab bar ─────────────────────────────── */
+.nav{
+  flex:0 0 auto;display:grid;grid-template-columns:repeat(5,1fr);align-items:end;
+  background:color-mix(in srgb,var(--ground) 92%,transparent);
+  backdrop-filter:blur(20px);border-top:1px solid var(--rule);
+  padding:10px 6px calc(10px + env(safe-area-inset-bottom,8px));
+  position:sticky;bottom:0;
+}
+.nv{display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--text-3);transition:color .2s;position:relative;}
+.nv[aria-current="true"]{color:var(--text);}
+.nv[aria-current="true"]::before{content:"";position:absolute;top:-10px;width:14px;height:2px;background:var(--gold);}
+.nl{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;}
+.nmic{width:50px;height:50px;border-radius:50%;background:var(--gold);color:var(--ground);display:grid;place-items:center;margin-bottom:2px;transition:transform .2s cubic-bezier(.2,1.4,.4,1);}
+.nmic:active{transform:scale(.9);}
+
+/* ──────────────────────────────── toast ──────────────────────────────── */
+.toast{
+  position:fixed;left:20px;right:20px;bottom:calc(28px + env(safe-area-inset-bottom,0px));z-index:30;
+  max-width:520px;margin:0 auto;
+  background:var(--verdigris);color:#04231C;padding:14px 16px;font-size:13.5px;font-weight:600;
+  opacity:0;visibility:hidden;pointer-events:none;
+  transform:translateY(24px) scale(.98);
+  transition:transform .42s cubic-bezier(.15,.9,.25,1.25), opacity .24s ease, visibility 0s linear .42s;
+}
+.toast.up{opacity:1;visibility:visible;transform:none;transition-delay:0s,0s,0s;}
+
+/* ─────────────────────────── entry choreography ───────────────────────── */
+@media (prefers-reduced-motion:no-preference){
+  .anim{animation:rise .46s cubic-bezier(.16,.84,.24,1) backwards;animation-delay:calc(var(--i,0) * 34ms);}
+  @keyframes rise{from{opacity:0;transform:translateY(11px);}to{opacity:1;transform:none;}}
+  .fade{animation:fade .34s ease backwards;}
+  @keyframes fade{from{opacity:0;}to{opacity:1;}}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none !important;transition:none !important;}
+}
+
+/* ─────────────────────────────── sign in ──────────────────────────────── */
+.signin{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;gap:22px;padding:40px 24px;max-width:420px;margin:0 auto;}
+.wordmark{font-family:var(--serif);font-optical-sizing:auto;font-weight:600;font-size:56px;letter-spacing:-.03em;line-height:.92;}
+.wordmark em{font-style:italic;font-weight:300;color:var(--gold);}
+.foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);}
+.foot form{display:inline;}
+.foot button{font:inherit;color:var(--text-2);letter-spacing:inherit;text-transform:inherit;}

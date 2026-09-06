@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { route } from "@/lib/api";
 import { db, facts, interactions, people } from "@/db";
 import { embed } from "@/lib/ai/embed";
 import { sql, and, eq } from "drizzle-orm";
@@ -12,7 +13,7 @@ import { sql, and, eq } from "drizzle-orm";
  * matched snippet so the app can show WHY it matched — that is what makes the
  * answer trustworthy rather than magic.
  */
-export async function GET(req: Request) {
+export const GET = route(async (req: Request) => {
   const userId = await requireUser();
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ results: [] });
@@ -72,4 +73,4 @@ export async function GET(req: Request) {
       why: `Matched ${r.source}: "${r.snippet}"`,
     })).filter((r) => r.person),
   });
-}
+});

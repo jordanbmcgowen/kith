@@ -11,8 +11,6 @@ import { z } from "zod";
  *      as a loose thread. Nothing the user said is ever thrown away.
  */
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-
 export const ExtractionSchema = z.object({
   people: z.array(z.object({
     matchedPersonId: z.string().nullable(),
@@ -46,6 +44,11 @@ export const ExtractionSchema = z.object({
 });
 
 export type Extraction = z.infer<typeof ExtractionSchema>;
+
+/** Cheap and fast for a twenty second note. */
+export const EXTRACT_MODEL = "claude-haiku-4-5";
+/** One step up when the cheap model returns something malformed. */
+export const ESCALATE_MODEL = "claude-sonnet-5";
 
 export type Candidate = {
   id: string;
@@ -83,11 +86,19 @@ export async function extract(input: {
   openThreads: OpenThread[];
   model?: string;
 }): Promise<Extraction> {
-  const model = input.model ?? "claude-haiku-4-5";
+  const model = input.model ?? EXTRACT_MODEL;
+
+  // Built per call, not at module load. In a Worker, secrets are only
+  // guaranteed readable inside a request, and the SDK throws immediately when
+  // handed an empty key, which would take the whole consumer down before its
+  // first log line.
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
+  const anthropic = new Anthropic({ apiKey });
 
   const res = await anthropic.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8000,
     system: SYSTEM,
     tools: [{
       name: "file_note",
@@ -121,8 +132,8 @@ export async function extract(input: {
   if (!parsed.success) {
     // One escalation to a stronger model before giving up. Cheap insurance:
     // a malformed extraction means the user's note goes to needs_review.
-    if (model !== "claude-sonnet-4-5") {
-      return extract({ ...input, model: "claude-sonnet-4-5" });
+    if (model !== ESCALATE_MODEL) {
+      return extract({ ...input, model: ESCALATE_MODEL });
     }
     throw new Error(`Extraction failed validation: ${parsed.error.message}`);
   }

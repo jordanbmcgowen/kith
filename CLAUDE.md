@@ -32,26 +32,45 @@ work here:
 
 Built and reviewed:
 
-- `src/db/schema.ts` — the complete data model. Read this before anything else.
-- `src/db/index.ts` — tenant-scoped query helper.
-- `src/lib/auth.ts` — Auth.js + Google, including access token refresh.
-- `src/lib/ai/extract.ts` — the transcript-to-records model call. This is the
+- `src/db/schema.ts`: the complete data model. Read this before anything else.
+- `src/db/index.ts`: tenant-scoped query helper.
+- `src/lib/auth.ts`: Auth.js + Google, including access token refresh.
+- `src/lib/ai/extract.ts`: the transcript-to-records model call. This is the
   core of the product. Treat changes here as high stakes.
 - `src/lib/ai/transcribe.ts`, `embed.ts`
 - `src/lib/warmth.ts`, `src/lib/geo.ts`
 - `src/lib/google/contacts.ts`, `calendar.ts`
-- `src/app/api/v1/*` — captures, today, people, search, sync
-- `src/workers/process-capture.ts` — the queue consumer
-- `docs/SETUP.md` — the ordered account and deploy checklist
+- `src/app/api/v1/*`: captures, today, people, search, sync. Every handler
+  is wrapped in `route()` from `src/lib/api.ts`, which turns a signed-out
+  call into a 401 instead of an opaque 500.
+- `src/workers/process-capture.ts`: the queue consumer. Its three model
+  calls are injectable so `scripts/pipeline-check.ts` can run the whole
+  filing path against the real database with no keys. Run it after any
+  change to the worker: `npm run pipeline:check`.
+- `src/lib/audio.ts`: the one table mapping a browser's recording mime type
+  to the extension Whisper expects. Upload route and worker both use it.
+- `docs/SETUP.md`: the ordered account and deploy checklist
+
+Built, step 2 of the build order (record and upload):
+
+- `src/app/globals.css`: the design system, ported from the prototype.
+- `src/lib/store.ts`: the data seam described below. `DATA_SOURCE` is
+  `"live"`; the demo block exists for building later screens.
+- `src/lib/recorder.ts`: MediaRecorder with the browser's own container
+  plus an analyser for the waveform.
+- `src/components/CaptureScreen.tsx`: voice or typed/pasted note, location,
+  upload, retry without losing the note, and a status list that polls while
+  a note is moving through the pipeline. Lives at `/record`; `/` redirects
+  there when signed in.
 
 Not built yet:
 
-- The entire UI. No React components exist. There is a published visual
-  prototype; ask Jordan for the link before designing screens from scratch.
+- The confirmation screen (step 3), person detail, search, the tab bar.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
-- Any tests
+- The nightly cron does nothing yet: `scheduled()` is a stub so the trigger
+  has a handler.
 
 ## Build order
 
@@ -137,7 +156,8 @@ Hard rules. Breaking one of these is a bug, not a preference:
   one.
 - **Warmth is a 2px meter**, never a ring around an avatar.
 - Coral is reserved for overdue. Nothing else in the app may be that
-  saturated.
+  saturated. The prototype's stop button while recording is coral; the app
+  uses parchment there instead, on purpose, so this rule holds everywhere.
 - Every animation must answer a question the user is already asking. No
   ambience. All of it stops under `prefers-reduced-motion`.
 

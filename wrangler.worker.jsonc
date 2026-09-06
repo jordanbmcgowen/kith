@@ -15,6 +15,7 @@
       "dead_letter_queue": "kith-captures-dlq"
     }]
   },
-  "triggers": { "crons": ["0 8 * * *"] },
+  // 8am Central. Cron runs on UTC; the handler is a Phase 3 stub for now.
+  "triggers": { "crons": ["0 13 * * *"] },
   "observability": { "enabled": true }
 }

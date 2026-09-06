@@ -112,11 +112,16 @@ pooled host. Check that it does not contain `-pooler`.
 
 Build in this order. Do not skip ahead; each step is testable on its own.
 
-1. **Record and upload.** `MediaRecorder` in the browser, `POST` to
-   `/api/v1/captures` with the blob and `navigator.geolocation` coordinates.
-   Works in Safari on iOS as long as the page is HTTPS and the user taps.
-2. **Watch the queue.** `wrangler tail kith-processor` while you record. You
-   should see transcribe → extract → filed.
+1. **Record and upload.** Built. `/record` records with `MediaRecorder`,
+   or takes a typed or pasted note, and posts it with the phone's position to
+   `/api/v1/captures`. Works in Safari on iOS as long as the page is HTTPS and
+   the user taps. iOS records mp4 and Chrome records webm; the upload names
+   the file to match, so do not hardcode an extension anywhere.
+2. **Watch the queue.** `npx wrangler tail kith-processor` while you record.
+   You should see `[capture <id>] transcribe`, then `extract`, then `filed`
+   (or `needs_review`). The Recent list on the record screen shows the same
+   progression. Before deploying a worker change, `npm run pipeline:check`
+   runs the filing logic against the real database with the models stubbed.
 3. **Confirmation screen.** Render the `extraction` JSON from the capture row.
    This is where the product either feels like magic or feels like homework.
 4. **Person detail.** Read path only. Facts, timeline, threads.
@@ -176,9 +181,9 @@ week of waiting.
 - **PWA manifest + service worker.** Once installed to the home screen, iOS
   (16.4+) and Android both support Web Push. No app store.
 - **VAPID keys:** `npx web-push generate-vapid-keys`.
-- **Nightly job** (already scheduled, 8am UTC — change to `0 13 * * *` for 8am
-  Central): threads due today, birthdays this week, people whose warmth just
-  dropped below their cadence.
+- **Nightly job** (already scheduled for 8am Central, `0 13 * * *` UTC, with
+  a stub `scheduled()` handler): threads due today, birthdays this week,
+  people whose warmth just dropped below their cadence.
 
 Keep the notification budget brutal. One a day, maximum. The fastest way to get
 uninstalled is to become another app that buzzes.

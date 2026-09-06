@@ -4,6 +4,11 @@
  * Deployed as a separate Worker bound to the same R2 bucket and Neon database.
  * Kept off the request path so the phone never waits, and so a model outage
  * delays notes rather than losing them.
+ *
+ * Secrets (DATABASE_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY) are read through
+ * process.env, which Cloudflare populates from Worker secrets when
+ * nodejs_compat is on and the compatibility date is 2025-04-01 or later.
+ * Both are set in wrangler.worker.jsonc.
  */
 import { db, captures, people, facts, interactions, threads, places, personPlaces, looseThreads } from "../db";
 import { transcribe } from "../lib/ai/transcribe";
@@ -11,31 +16,69 @@ import { extract, AUTO_FILE_THRESHOLD, type Candidate } from "../lib/ai/extract"
 import { embed } from "../lib/ai/embed";
 import { warmth, cadenceFor } from "../lib/warmth";
 import { bbox, haversineM } from "../lib/geo";
+import { audioExtension } from "../lib/audio";
 import { and, eq, gte, lte, isNull, sql } from "drizzle-orm";
 
 type Msg = { captureId: string; userId: string };
 
+/** How many deliveries before a capture is left `failed` and visible. */
+const MAX_ATTEMPTS = 3;
+
+/**
+ * An error that a retry cannot fix: silence, a missing object, a rejected
+ * request. Retrying these only burns three Whisper calls before reaching the
+ * same failed state.
+ */
+class PermanentError extends Error {
+  readonly permanent = true;
+}
+
+const isPermanent = (err: unknown) => {
+  const e = err as { permanent?: boolean; status?: number } | null;
+  if (e?.permanent) return true;
+  // 4xx from a model API means the request itself is bad, not the moment.
+  return typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.status !== 429;
+};
+
 export default {
   async queue(batch: MessageBatch<Msg>, env: Env) {
     for (const msg of batch.messages) {
+      const { captureId } = msg.body;
       try {
         await processCapture(msg.body, env);
         msg.ack();
       } catch (err) {
-        console.error("capture failed", msg.body.captureId, err);
+        const giveUp = isPermanent(err) || msg.attempts >= MAX_ATTEMPTS;
+        console.error(`[capture ${captureId}] attempt ${msg.attempts} failed${giveUp ? ", giving up" : ", will retry"}:`, err);
+        // Record the error on every attempt so it is visible in the app, but
+        // only flip the status to failed once we are done trying. A note that
+        // is about to be retried is not failed yet.
         await db().update(captures)
-          .set({ status: "failed", error: String(err) })
-          .where(eq(captures.id, msg.body.captureId));
-        // Retry twice, then leave it failed and visible in the app rather than
-        // silently gone.
-        if (msg.attempts < 3) msg.retry({ delaySeconds: 30 * msg.attempts });
-        else msg.ack();
+          .set(giveUp ? { status: "failed", error: String(err) } : { error: String(err) })
+          .where(eq(captures.id, captureId));
+        if (giveUp) msg.ack();
+        else msg.retry({ delaySeconds: 30 * msg.attempts });
       }
     }
   },
+
+  async scheduled(controller: ScheduledController) {
+    // Phase 3: threads due today, birthdays this week, warmth that just
+    // dropped below cadence. Nothing runs yet; this exists so the cron in
+    // wrangler.worker.jsonc has a handler and does not error every morning.
+    console.log(`scheduled ${controller.cron}: nothing to do until Phase 3`);
+  },
 };
 
-export async function processCapture({ captureId, userId }: Msg, env: Env) {
+/**
+ * The three model calls, injectable so scripts/pipeline-check.ts can run the
+ * whole filing path against a real database without spending a cent or
+ * needing a key. Production never passes this argument.
+ */
+export type Models = { transcribe: typeof transcribe; extract: typeof extract; embed: typeof embed };
+const LIVE: Models = { transcribe, extract, embed };
+
+export async function processCapture({ captureId, userId }: Msg, env: Env, models: Models = LIVE) {
   const capture = await db().query.captures.findFirst({
     where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
   });
@@ -48,15 +91,25 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
   });
 
   /* 1. transcribe ------------------------------------------------------- */
-  let transcript = capture.rawText ?? "";
+  // A retry after a successful transcription must reuse it, not start from
+  // rawText, which is empty for a voice note.
+  let transcript = capture.transcript ?? capture.rawText ?? "";
   if (capture.audioKey && !capture.transcript) {
+    console.log(`[capture ${captureId}] transcribe ${capture.audioKey}`);
     await db().update(captures).set({ status: "transcribing" }).where(eq(captures.id, captureId));
     const obj = await env.AUDIO.get(capture.audioKey);
-    if (!obj) throw new Error("Audio object missing from R2");
+    if (!obj) throw new PermanentError("Audio object missing from R2");
 
-    const out = await transcribe({
-      audio: await obj.blob(),
-      filename: "note.webm",
+    // The filename extension and the content type both have to match the
+    // bytes: iOS records mp4, Chrome records webm, and Whisper rejects a
+    // mismatch. The extension was chosen at upload time from the same table.
+    const ext = capture.audioKey.split(".").pop() || audioExtension(obj.httpMetadata?.contentType);
+    const type = obj.httpMetadata?.contentType || `audio/${ext}`;
+    const audio = new Blob([await obj.arrayBuffer()], { type });
+
+    const out = await models.transcribe({
+      audio,
+      filename: `note.${ext}`,
       // The names hint is what keeps unusual names from being mangled.
       nameHints: roster.flatMap((p) => [p.displayName, p.goesBy].filter(Boolean) as string[]),
     });
@@ -64,8 +117,9 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
     await db().update(captures)
       .set({ transcript, durationSec: out.durationSec })
       .where(eq(captures.id, captureId));
+    console.log(`[capture ${captureId}] transcribed ${out.durationSec}s, ${transcript.length} chars`);
   }
-  if (!transcript.trim()) throw new Error("Empty transcript");
+  if (!transcript.trim()) throw new PermanentError("Empty transcript. Nothing was said, or the microphone was muted.");
 
   /* 2. resolve place ---------------------------------------------------- */
   const place = capture.lat != null && capture.lng != null
@@ -73,6 +127,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
     : null;
 
   /* 3. extract ---------------------------------------------------------- */
+  console.log(`[capture ${captureId}] extract (${roster.length} candidates, place: ${place?.name ?? "none"})`);
   await db().update(captures).set({ status: "extracting" }).where(eq(captures.id, captureId));
 
   const nearIds = place
@@ -87,7 +142,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
     circle: p.circle,
     role: p.role,
     nearHere: nearIds.has(p.id),
-    topFacts: (p as any).facts?.map((f: any) => f.content) ?? [],
+    topFacts: p.facts.map((f) => f.content),
   }));
 
   const open = await db().query.threads.findMany({
@@ -95,7 +150,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
     limit: 40,
   });
 
-  const result = await extract({
+  const result = await models.extract({
     transcript,
     now: capture.capturedAt.toISOString(),
     timezone: "America/Chicago",
@@ -109,51 +164,68 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
   });
 
   /* 4. file ------------------------------------------------------------- */
-  const lowConfidence = result.people.some((p) => p.confidence < AUTO_FILE_THRESHOLD);
+  // Everything below is derived from this capture and re-runnable. A retry
+  // after a partial failure, or a deliberate re-extraction, replaces what
+  // this capture filed before rather than appending a second copy.
+  await db().delete(facts).where(and(eq(facts.userId, userId), eq(facts.captureId, captureId)));
+  await db().delete(interactions).where(and(eq(interactions.userId, userId), eq(interactions.captureId, captureId)));
+  await db().delete(threads).where(and(eq(threads.userId, userId), eq(threads.createdFromCaptureId, captureId)));
+  await db().delete(looseThreads).where(and(eq(looseThreads.userId, userId), eq(looseThreads.captureId, captureId)));
+
+  let lowConfidence = result.people.some((p) => p.confidence < AUTO_FILE_THRESHOLD);
   const nameToId = new Map<string, string>();
+  // Anything the model attached to a person it could neither match nor call
+  // new lands here, so it becomes a loose thread instead of vanishing.
+  const unresolved = [...result.unresolved];
 
   for (const p of result.people) {
     if (p.matchedPersonId) { nameToId.set(p.name, p.matchedPersonId); continue; }
-    if (!p.isNew) continue;
+    if (!p.isNew) { lowConfidence = true; continue; }
     const [row] = await db().insert(people).values({
       userId,
       displayName: p.name,
-      circle: (p.circle ?? "other") as any,
+      circle: p.circle ?? "other",
       role: p.role ?? null,
     }).returning();
     nameToId.set(p.name, row.id);
   }
 
+  const orphan = (personName: string, content: string) => {
+    unresolved.push(`${personName}: ${content}`);
+  };
+
   const factRows = result.facts
-    .filter((f) => nameToId.has(f.personName))
+    .filter((f) => nameToId.has(f.personName) || (orphan(f.personName, f.content), false))
     .map((f) => ({
-      userId, personId: nameToId.get(f.personName)!, kind: f.kind as any,
+      userId, personId: nameToId.get(f.personName)!, kind: f.kind,
       content: f.content, confidence: f.confidence, captureId,
       pinned: f.kind === "relation" || f.kind === "identity" || f.kind === "sensitive",
+      embedding: null as number[] | null,
     }));
 
   const interactionRows = result.interactions
-    .filter((i) => nameToId.has(i.personName))
+    .filter((i) => nameToId.has(i.personName) || (orphan(i.personName, i.summary), false))
     .map((i) => ({
       userId, personId: nameToId.get(i.personName)!, captureId,
       placeId: place?.id ?? null,
-      occurredAt: new Date(i.occurredAt), channel: i.channel,
+      occurredAt: safeDate(i.occurredAt, capture.capturedAt), channel: i.channel,
       summary: i.summary, lat: capture.lat, lng: capture.lng,
+      embedding: null as number[] | null,
     }));
 
   // Embed facts and interactions together so search covers both.
-  const vectors = await embed([...factRows.map((f) => f.content), ...interactionRows.map((i) => i.summary)]);
-  factRows.forEach((f, i) => Object.assign(f, { embedding: vectors[i] }));
-  interactionRows.forEach((r, i) => Object.assign(r, { embedding: vectors[factRows.length + i] }));
+  const vectors = await models.embed([...factRows.map((f) => f.content), ...interactionRows.map((i) => i.summary)]);
+  factRows.forEach((f, i) => { f.embedding = vectors[i] ?? null; });
+  interactionRows.forEach((r, i) => { r.embedding = vectors[factRows.length + i] ?? null; });
 
-  if (factRows.length) await db().insert(facts).values(factRows as any);
-  if (interactionRows.length) await db().insert(interactions).values(interactionRows as any);
+  if (factRows.length) await db().insert(facts).values(factRows);
+  if (interactionRows.length) await db().insert(interactions).values(interactionRows);
 
   for (const t of result.threads) {
-    if (!nameToId.has(t.personName)) continue;
+    if (!nameToId.has(t.personName)) { orphan(t.personName, t.title); continue; }
     await db().insert(threads).values({
       userId, personId: nameToId.get(t.personName)!, title: t.title,
-      dueAt: t.dueAt ? new Date(t.dueAt) : null, createdFromCaptureId: captureId,
+      dueAt: t.dueAt ? safeDate(t.dueAt, null) : null, createdFromCaptureId: captureId,
     });
   }
 
@@ -163,7 +235,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
       .where(and(eq(threads.id, id), eq(threads.userId, userId)));
   }
 
-  for (const text of result.unresolved) {
+  for (const text of unresolved) {
     await db().insert(looseThreads).values({ userId, captureId, content: text });
   }
 
@@ -194,11 +266,22 @@ export async function processCapture({ captureId, userId }: Msg, env: Env) {
     }
   }
 
+  const status = lowConfidence ? "needs_review" : "filed";
   await db().update(captures).set({
-    status: lowConfidence ? "needs_review" : "filed",
-    extraction: result as any,
+    status,
+    extraction: result,
     placeId: place?.id ?? null,
+    error: null,
   }).where(eq(captures.id, captureId));
+  console.log(`[capture ${captureId}] ${status}: ${result.people.length} people, ${factRows.length} facts, ${interactionRows.length} interactions, ${result.threads.length} threads, ${unresolved.length} loose`);
+}
+
+/** The model returns ISO strings; a malformed one must not take the whole note down. */
+function safeDate(iso: string, fallback: Date): Date;
+function safeDate(iso: string, fallback: null): Date | null;
+function safeDate(iso: string, fallback: Date | null): Date | null {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? fallback : d;
 }
 
 /**
@@ -261,7 +344,7 @@ async function resolvePlace(userId: string, lat: number, lng: number, env: Env) 
   return row;
 }
 
-interface Env {
+export interface Env {
   AUDIO: R2Bucket;
   GOOGLE_PLACES_KEY?: string;
 }
