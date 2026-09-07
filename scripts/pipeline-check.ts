@@ -306,6 +306,14 @@ async function main() {
     await fileCapture({ captureId: c1.id, userId, by: "user", embed });
     check("confirmed: filed, one Dev Patel, 2 facts", (await captureRow(c1.id))?.status === "filed" && (await peopleNamed(userId, DEV)).length === 1 && (await factsOf(c1.id)).length === 2);
 
+    console.log("   ...then re-read without Dev Patel in it");
+    await processCapture({ captureId: c1.id, userId }, env, models({ ...extraction1, people: [extraction1.people[0]], facts: [extraction1.facts[0]], interactions: [extraction1.interactions[0]] }));
+    check("filed itself again", (await captureRow(c1.id))?.status === "filed");
+    check("a person the model stopped listing keeps the row it was given", (await peopleNamed(userId, DEV)).length === 1 && (await factsOf(c1.id)).length === 1);
+    check("and stays in the record as this note's", (await captureRow(c1.id))?.filing?.created.some((c) => c.personId === dev.id) === true);
+    await processCapture({ captureId: c1.id, userId }, env, models(extraction1));
+    check("listed again: the same row, no second Dev Patel", (await peopleNamed(userId, DEV)).length === 1 && (await peopleNamed(userId, DEV))[0].id === dev.id);
+
     /* ---- 11. notes filed before the filing record existed ---- */
     console.log("\n11. legacy note: person rows found by name and time, removed on leave out when unreferenced");
     const LEGACY = `${MARK} Legacy Person`;

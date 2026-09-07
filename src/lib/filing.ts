@@ -316,11 +316,21 @@ export async function fileCapture(o: {
   await d.delete(threads).where(and(eq(threads.userId, userId), eq(threads.createdFromCaptureId, captureId)));
   await d.delete(looseThreads).where(and(eq(looseThreads.userId, userId), eq(looseThreads.captureId, captureId)));
 
-  /* 6. people this capture created and no longer uses ------------------- */
-  // Gone only when nothing else refers to them: a person another note has
-  // written about, or one that came from Google Contacts, stays.
+  /* 6. people this capture created and the user now leaves out ---------- */
+  // Only an explicit "leave out" removes a row, and only when nothing else
+  // refers to it: a person another note has written about, or one that came
+  // from Google Contacts, stays. A name the model simply stopped listing on a
+  // re-run keeps its row. The user said that name once; the model's second
+  // reading is not a reason to lose it.
+  const droppedIds = new Set<string>();
+  x.people.forEach((p, i) => {
+    const dec = decisions.people[i];
+    if (dec.action !== "drop") return;
+    if (dec.personId) droppedIds.add(dec.personId);
+    for (const c of interim.created) if (key(c.name) === key(p.name)) droppedIds.add(c.personId);
+  });
   for (const c of interim.created) {
-    if (used.has(c.personId) || attached.includes(c.personId)) continue;
+    if (used.has(c.personId) || attached.includes(c.personId) || !droppedIds.has(c.personId)) continue;
     const row = rosterById.get(c.personId);
     if (!row || row.googleContactId) continue;
     const refs = await d.execute(sql`

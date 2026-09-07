@@ -228,6 +228,8 @@ export function ConfirmScreen({ id }: { id: string }) {
             </div>
           </section>
 
+          <KeptFromBefore x={x} decisions={decisions} view={view} rosterById={rosterById} index={n++} />
+
           <LooseThreads
             x={x}
             decisions={decisions}
@@ -404,6 +406,49 @@ function ItemRow({ k, text: t, keep, muted, onToggle }: { k: string; text: strin
       <span className="it">{t}</span>
       {!muted && <button className="act" onClick={onToggle}>{keep ? "Drop" : "Undo"}</button>}
     </div>
+  );
+}
+
+/* ───────────────────────────── kept from before ────────────────────────── */
+
+/**
+ * People this note added the first time it was read that the model did not
+ * list on a re-read. They keep their rows; only Leave out removes a person.
+ * Shown so a re-run never quietly loses a name.
+ */
+function KeptFromBefore({ x, decisions, view, rosterById, index }: {
+  x: ExtractionResult;
+  decisions: FilingDecisions;
+  view: CaptureView;
+  rosterById: Map<string, PersonLite>;
+  index: number;
+}) {
+  const referenced = new Set<string>();
+  for (const p of x.people) if (p.matchedPersonId) referenced.add(p.matchedPersonId);
+  for (const d of decisions.people) if (d.personId) referenced.add(d.personId);
+  const names = new Set(x.people.map((p) => p.name.trim().toLowerCase()));
+  const kept = (view.capture.filing?.created ?? [])
+    .filter((c) => !referenced.has(c.personId) && !names.has(c.name.trim().toLowerCase()))
+    .map((c) => rosterById.get(c.personId))
+    .filter((p): p is PersonLite => !!p);
+  if (!kept.length) return null;
+
+  return (
+    <section className="block anim" style={style(index)}>
+      <div className="label">Also from this note <span className="n">{kept.length}</span></div>
+      <p className="lede" style={{ marginTop: 8 }}>Added the first time this note was read. Not mentioned this time; they stay.</p>
+      <div className="list" style={{ marginTop: 6 }}>
+        {kept.map((p) => (
+          <div key={p.id} className="row" style={{ padding: "12px 0" }}>
+            <span className="mark" style={{ "--c": circleColor(p.circle) } as CSSProperties}>{initials(p.displayName)}</span>
+            <span className="body">
+              <span className="nm">{p.displayName}</span>
+              {p.role && <span className="role">{p.role}</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
