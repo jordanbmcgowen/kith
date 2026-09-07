@@ -107,8 +107,15 @@ Built, step 3 of the build order (the confirmation screen):
   read (`reconstructFiling`): person rows added within half an hour of the
   note whose names appear in its extraction count as created by it.
 - The extraction prompt says who counts as a person (not someone mentioned in
-  passing) and what confidence means for a new person (that they are distinct
-  from every candidate).
+  passing, but every bare name on a list) and what confidence means for a new
+  person (that they are distinct from every candidate).
+- Tags. `people.tags` is the user's own words for the groups a person belongs
+  to ("YoungLife", "Journeymen"). Circles stay the fixed five. The model gets
+  the user's existing tags and each candidate's, proposes tags per person
+  from the note's own headings and phrasing, and filing keeps one spelling
+  per tag. A decision's `tags` is the person's complete list; the screen
+  starts from what they already carry plus what the note proposes, and
+  shows it under each person with one tap to remove and "+ tag" to add.
 
 Not built yet:
 

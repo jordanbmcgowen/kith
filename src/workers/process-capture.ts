@@ -186,9 +186,16 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
     goesBy: p.goesBy,
     circle: p.circle,
     role: p.role,
+    tags: p.tags,
     nearHere: nearIds.has(p.id),
     topFacts: p.facts.map((f) => f.content),
   }));
+
+  // The user's tags, most used first, so the model reuses a spelling instead
+  // of inventing "Young Life" next to "YoungLife".
+  const tagCounts = new Map<string, number>();
+  for (const p of roster) for (const t of p.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([t]) => t);
 
   const open = await db().query.threads.findMany({
     where: and(eq(threads.userId, userId), eq(threads.status, "open")),
@@ -205,6 +212,7 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
     dateContext: upcomingDays(capture.capturedAt, timezone, 14),
     placeName: place?.name ?? null,
     candidates,
+    tags,
     openThreads: open.map((t) => ({
       id: t.id,
       personName: roster.find((p) => p.id === t.personId)?.displayName ?? "",

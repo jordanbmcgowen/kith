@@ -91,6 +91,9 @@ npm run dev
   Silent wrong filing is worse than a confirmation tap. A note that would add
   three or more people at once waits too, so a pasted roster lands with
   circles set instead of as a pile of "other".
+- **Circles are fixed, tags are yours.** Five circles order the app. Tags
+  (`people.tags`) are free text for the groups you actually move in, proposed
+  by extraction from your own words and confirmed with a tap.
 - **Every query is scoped by `userId`.** `scoped()` in `src/db/index.ts` is there
   to make the tenant filter hard to forget as the route count grows.
 - **No LiveKit.** There is no realtime audio between people here, only one-way

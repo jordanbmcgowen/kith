@@ -33,7 +33,7 @@ export const GET = route(async (_req: Request, ctx: Ctx) => {
   const [roster, place, closes, suggestions] = await Promise.all([
     db().query.people.findMany({
       where: and(eq(people.userId, userId), isNull(people.archivedAt)),
-      columns: { id: true, displayName: true, goesBy: true, circle: true, role: true },
+      columns: { id: true, displayName: true, goesBy: true, circle: true, role: true, tags: true },
       orderBy: (p, { asc }) => asc(p.displayName),
       limit: 500,
     }),
@@ -52,9 +52,15 @@ export const GET = route(async (_req: Request, ctx: Ctx) => {
     x ? suggest(userId, x, filing) : Promise.resolve({}),
   ]);
 
+  // Every tag the user has, most used first: the suggestions under "+ tag".
+  const tagCounts = new Map<string, number>();
+  for (const p of roster) for (const t of p.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+
   return NextResponse.json({
     capture: { ...capture, filing, place: place ?? null },
     people: roster,
+    tags,
     closes: closes.map((t) => ({
       id: t.id, title: t.title,
       personName: roster.find((p) => p.id === t.personId)?.displayName ?? null,

@@ -100,8 +100,9 @@ async function main() {
 
   try {
     /* ---- fixtures: one known person, one open thread, one known place ---- */
+    const GOLF = `${MARK} Golf`;
     const [marcus] = await db().insert(people).values({
-      userId, displayName: `${MARK} Marcus Ellery`, goesBy: "Marcus", circle: "friends", role: "golf, flies a Cirrus",
+      userId, displayName: `${MARK} Marcus Ellery`, goesBy: "Marcus", circle: "friends", role: "golf, flies a Cirrus", tags: [GOLF],
     }).returning();
     const [openThread] = await db().insert(threads).values({
       userId, personId: marcus.id, title: `${MARK} send Marcus the Cirrus article`,
@@ -120,8 +121,9 @@ async function main() {
 
     const extraction1: Extraction = {
       people: [
-        { matchedPersonId: marcus.id, name: "Marcus", confidence: 0.96, isNew: false },
-        { matchedPersonId: null, name: DEV, confidence: 0.9, isNew: true, circle: "neighbors", role: "runs a coffee roaster in Bishop Arts" },
+        // Lowercase on purpose: it must land as the spelling Marcus already has, plus one new tag.
+        { matchedPersonId: marcus.id, name: "Marcus", confidence: 0.96, isNew: false, tags: [GOLF.toLowerCase(), `${MARK} Board`] },
+        { matchedPersonId: null, name: DEV, confidence: 0.9, isNew: true, circle: "neighbors", role: "runs a coffee roaster in Bishop Arts", tags: [`${MARK} Bishop Arts`] },
       ],
       facts: [
         { personName: "Marcus", kind: "relation", content: "Daughter Priya, got into Rice early decision", confidence: 0.95 },
@@ -156,6 +158,13 @@ async function main() {
 
     const [dev] = await peopleNamed(userId, DEV);
     check("new person created with circle", dev?.circle === "neighbors", dev?.circle);
+    check("new person carries the proposed tag", JSON.stringify(dev?.tags) === JSON.stringify([`${MARK} Bishop Arts`]), dev?.tags);
+    const marcusTagged = await db().query.people.findFirst({ where: eq(people.id, marcus.id) });
+    check("matched person keeps his tag in its own spelling and gains the new one",
+      JSON.stringify(marcusTagged?.tags) === JSON.stringify([GOLF, `${MARK} Board`]), marcusTagged?.tags);
+    check("model was given the user's tags and each candidate's",
+      (lastExtractInput?.tags ?? []).includes(GOLF) && lastExtractInput?.candidates.find((c) => c.id === marcus.id)?.tags.includes(GOLF) === true,
+      lastExtractInput?.tags);
 
     const f = await factsOf(c1.id);
     check("2 facts filed (orphan excluded)", f.length === 2, f.length);
@@ -260,7 +269,7 @@ async function main() {
 
     const decisions9: FilingDecisions = {
       ...defaultDecisions(extraction9, club.id),
-      people: [{ action: "new", personId: null, circle: "work" }],
+      people: [{ action: "new", personId: null, circle: "work", tags: [`${MARK} Work Group`, ` ${MARK} work group `] }],
       facts: [{ keep: true }, { keep: false }],
       unresolved: [{ personId: marcus.id, dismissed: false }, { personId: null, dismissed: true }],
       place: { placeId: null, name: null },
@@ -271,6 +280,7 @@ async function main() {
     const f9 = await factsOf(c9.id);
     const loose9 = await looseOf(c9.id);
     check("new person created with the chosen circle", dev2?.circle === "work", dev2?.circle);
+    check("typed tags: trimmed, one spelling, no duplicate", JSON.stringify(dev2?.tags) === JSON.stringify([`${MARK} Work Group`]), dev2?.tags);
     check("dropped fact stayed out; attached loose thread became a fact on Marcus",
       f9.length === 2 && f9.some((x) => x.personId === dev2?.id && x.content === "Keep this one") && f9.some((x) => x.personId === marcus.id && x.kind === "context" && x.content.includes("loose a")),
       f9.map((x) => [x.content, x.personId === marcus.id ? "marcus" : "dev2"]));
@@ -289,11 +299,12 @@ async function main() {
     check("only the attached fact on Marcus remains; the interaction is gone", f9b.length === 1 && f9b[0].personId === marcus.id && (await interactionsOf(c9.id)).length === 0, f9b.length);
 
     console.log("   ...then brought back as new, twice");
-    const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, circle: "work" }] };
+    const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, circle: "work", tags: [] }] };
     await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
     await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
     const dev2s = await peopleNamed(userId, DEV2);
     check("exactly one row again, with its circle", dev2s.length === 1 && dev2s[0].circle === "work", dev2s.length);
+    check("an empty tag list on the screen clears the tags", dev2s[0]?.tags.length === 0, dev2s[0]?.tags);
     check("2 facts, 1 interaction, 2 loose, no duplicates", (await factsOf(c9.id)).length === 2 && (await interactionsOf(c9.id)).length === 1 && (await looseOf(c9.id)).length === 2);
 
     /* ---- 10. a re-run asks for a look, and keeps what was filed until it gets one ---- */

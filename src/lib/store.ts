@@ -40,6 +40,8 @@ export type PersonLite = {
   displayName: string;
   goesBy: string | null;
   circle: Circle;
+  /** The user's own groups for this person: "YoungLife", "Journeymen". */
+  tags: string[];
   role: string | null;
   _demo?: true;
 };
@@ -55,6 +57,8 @@ export type CaptureView = {
   };
   /** The user's people, for "someone else" and "attach to". */
   people: PersonLite[];
+  /** Every tag the user has, most used first. Suggestions under "+ tag". */
+  tags: string[];
   /** Keyed by the index of the person in extraction.people. Only for people the model called new. */
   suggestions: Record<string, Suggestion[]>;
   /** Open threads this note closes, by title. */
@@ -103,14 +107,14 @@ export class ApiError extends Error {
    escaped. Nothing outside this block may reference a DEMO_ identifier.
    ══════════════════════════════════════════════════════════════════════════════════════════ */
 const DEMO_PEOPLE: PersonLite[] = [
-  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, circle: "friends", role: "Franchisee, three territories. Flies a Cirrus." },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, circle: "friends", role: "Wine buyer, Bishop Cellars" },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, circle: "neighbors", role: "Two doors down, the blue house" },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, circle: "work", role: "VP Operations, Bright Path Brands" },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, circle: "friends", tags: ["Brook Hollow"], role: "Franchisee, three territories. Flies a Cirrus." },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, circle: "friends", tags: [], role: "Wine buyer, Bishop Cellars" },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, circle: "neighbors", tags: ["Lakewood"], role: "Two doors down, the blue house" },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, circle: "work", tags: ["Bright Path"], role: "VP Operations, Bright Path Brands" },
 ];
 
 const DEMO_EXTRACTION_1: ExtractionResult = {
-  people: [{ matchedPersonId: DEMO_PEOPLE[0].id, name: "Marcus", confidence: 0.96, isNew: false }],
+  people: [{ matchedPersonId: DEMO_PEOPLE[0].id, name: "Marcus", confidence: 0.96, isNew: false, tags: ["Brook Hollow"] }],
   facts: [
     { personName: "Marcus", kind: "relation", content: "Daughter Priya got into Rice, early decision", confidence: 0.95 },
     { personName: "Marcus", kind: "context", content: "Ready to move on a third territory, wants to talk financing this month", confidence: 0.9 },
@@ -123,7 +127,7 @@ const DEMO_EXTRACTION_1: ExtractionResult = {
 };
 
 const DEMO_EXTRACTION_2: ExtractionResult = {
-  people: [{ matchedPersonId: null, name: "Dev", confidence: 0.55, isNew: true, circle: "neighbors", role: "Runs the roaster in Bishop Arts" }],
+  people: [{ matchedPersonId: null, name: "Dev", confidence: 0.55, isNew: true, circle: "neighbors", role: "Runs the roaster in Bishop Arts", tags: ["Bishop Arts"] }],
   facts: [{ personName: "Dev", kind: "relation", content: "Kid starts at Lakewood this fall", confidence: 0.85 }],
   interactions: [{ personName: "Dev", summary: "Met at the roaster in Bishop Arts", occurredAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), channel: "in_person" }],
   threads: [],
@@ -178,7 +182,7 @@ const demoStore: Store = {
   async note(id) {
     const capture = DEMO_CAPTURES.find((c) => c.id === id);
     if (!capture) throw new ApiError(404, "No such note");
-    return { capture: { ...capture }, people: DEMO_PEOPLE, suggestions: { 0: [{ id: DEMO_PEOPLE[2].id, displayName: "Carlos Mendez", role: DEMO_PEOPLE[2].role, similarity: 0.4 }] }, closes: [] };
+    return { capture: { ...capture }, people: DEMO_PEOPLE, tags: ["Brook Hollow", "Lakewood", "Bright Path"], suggestions: { 0: [{ id: DEMO_PEOPLE[2].id, displayName: "Carlos Mendez", role: DEMO_PEOPLE[2].role, similarity: 0.4 }] }, closes: [] };
   },
   async confirm(id, decisions) {
     const capture = DEMO_CAPTURES.find((c) => c.id === id);

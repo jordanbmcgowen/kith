@@ -23,7 +23,7 @@ import {
 import { warmth, cadenceFor } from "./warmth";
 import { resolvePlaceByName } from "./places";
 import { AUTO_FILE_THRESHOLD } from "./ai/threshold";
-import { defaultDecisions } from "./decisions";
+import { defaultDecisions, mergeTags } from "./decisions";
 
 export { defaultDecisions };
 
@@ -42,6 +42,7 @@ export const DecisionsSchema = z.object({
     action: z.enum(["match", "new", "drop"]),
     personId: uuid.nullable(),
     circle: z.enum(CIRCLES).optional(),
+    tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
   })),
   facts: z.array(z.object({ keep: z.boolean() })),
   interactions: z.array(z.object({ keep: z.boolean() })),
@@ -146,18 +147,32 @@ export async function fileCapture(o: {
   const x = capture.extraction;
   if (!x) throw new FilingError(409, "This note has not been read yet");
 
-  const decisions = o.decisions ?? defaultDecisions(x, capture.placeId);
-  checkShape(x, decisions);
-  const previous = capture.filing ?? await reconstructFiling(userId, capture);
-
   const prefs = await d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } });
   const cadenceDefaults = prefs?.cadenceDefaults ?? { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
 
   const roster = await d.query.people.findMany({
     where: eq(people.userId, userId),
-    columns: { id: true, displayName: true, circle: true, cadenceDays: true, googleContactId: true },
+    columns: { id: true, displayName: true, circle: true, tags: true, cadenceDays: true, googleContactId: true },
+    orderBy: (p, { asc }) => asc(p.createdAt),
   });
   const rosterById = new Map(roster.map((p) => [p.id, p]));
+
+  const decisions = o.decisions ?? defaultDecisions(x, capture.placeId, (id) => rosterById.get(id)?.tags ?? []);
+  checkShape(x, decisions);
+  const previous = capture.filing ?? await reconstructFiling(userId, capture);
+
+  // One spelling per tag. "younglife" typed on the screen, or proposed by the
+  // model, becomes the "YoungLife" the user already has. New spellings are
+  // registered as they appear, so two people tagged in one note agree.
+  const spelling = new Map<string, string>();
+  for (const p of roster) for (const t of p.tags) if (!spelling.has(key(t))) spelling.set(key(t), t);
+  const normalizeTags = (tags: string[]) => mergeTags([], tags).map((t) => {
+    const known = spelling.get(key(t));
+    if (known) return known;
+    spelling.set(key(t), t);
+    return t;
+  });
+  const sameTags = (a: string[], b: string[]) => a.length === b.length && a.every((t, i) => t === b[i]);
 
   /* 1. people ----------------------------------------------------------- */
   // Every name the model used, resolved to a person row: an existing one the
@@ -169,6 +184,7 @@ export async function fileCapture(o: {
   const used = new Set<string>();
   const created: CaptureFiling["created"] = [];
   const circleChanges = new Map<string, Circle>();
+  const tagChanges = new Map<string, string[]>();
 
   for (const [i, p] of x.people.entries()) {
     const dec = decisions.people[i];
@@ -190,8 +206,9 @@ export async function fileCapture(o: {
           userId,
           displayName: p.name,
           circle: dec.circle ?? p.circle ?? "other",
+          tags: normalizeTags(dec.tags ?? p.tags ?? []),
           role: p.role ?? null,
-        }).returning({ id: people.id, displayName: people.displayName, circle: people.circle, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
+        }).returning({ id: people.id, displayName: people.displayName, circle: people.circle, tags: people.tags, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
         personId = row.id;
         rosterById.set(row.id, row);
       }
@@ -203,6 +220,10 @@ export async function fileCapture(o: {
       if (!created.some((c) => c.personId === personId)) created.push({ name: p.name, personId });
     }
     if (dec.circle && rosterById.get(personId)!.circle !== dec.circle) circleChanges.set(personId, dec.circle);
+    if (dec.tags) {
+      const final = normalizeTags(dec.tags);
+      if (!sameTags(final, rosterById.get(personId)!.tags)) tagChanges.set(personId, final);
+    }
   }
 
   // Record the rows created so far before anything that can fail. A crash
@@ -213,10 +234,14 @@ export async function fileCapture(o: {
   };
   await d.update(captures).set({ filing: interim }).where(eq(captures.id, captureId));
 
-  for (const [personId, circle] of circleChanges) {
-    await d.update(people).set({ circle, updatedAt: new Date() })
+  for (const personId of new Set([...circleChanges.keys(), ...tagChanges.keys()])) {
+    const circle = circleChanges.get(personId);
+    const tags = tagChanges.get(personId);
+    await d.update(people).set({ ...(circle ? { circle } : {}), ...(tags ? { tags } : {}), updatedAt: new Date() })
       .where(and(eq(people.id, personId), eq(people.userId, userId)));
-    rosterById.get(personId)!.circle = circle;
+    const row = rosterById.get(personId)!;
+    if (circle) row.circle = circle;
+    if (tags) row.tags = tags;
   }
 
   /* 2. place ------------------------------------------------------------ */

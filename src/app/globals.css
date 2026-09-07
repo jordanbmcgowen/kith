@@ -348,3 +348,13 @@ a.row:active{background:var(--rule);}
 .picker .row{padding:10px 0;gap:11px;border-bottom:1px solid var(--rule);}
 .picker .row:hover{background:var(--raise);padding-left:6px;}
 .picker .mark{width:30px;height:30px;font-size:11px;}
+
+/* Tags: the user's own groups, as text with a hairline. Tap the mark to remove. */
+.tags{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin-top:2px;min-height:18px;}
+.tg{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2);
+  border-bottom:1px solid var(--rule-2);padding-bottom:2px;
+}
+.tg button{color:var(--text-3);font-size:13px;line-height:1;padding:0 1px;}
+.tg button:hover{color:var(--text);}

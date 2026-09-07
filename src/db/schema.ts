@@ -143,6 +143,11 @@ export const people = pgTable("people", {
   pronouns: text("pronouns"),
 
   circle: circleEnum("circle").default("other").notNull(),
+  // The user's own words for the groups this person belongs to: "YoungLife",
+  // "Journeymen", "Brook Hollow". Proposed by extraction from the note's own
+  // headings and phrasing, confirmed on the screen, one spelling per tag.
+  // Circles are fixed and five; tags are open and theirs.
+  tags: text("tags").array().default(sql`'{}'::text[]`).notNull(),
   role: text("role"),                            // one-line "who they are to you"
   company: text("company"),
   title: text("title"),
@@ -166,6 +171,8 @@ export const people = pgTable("people", {
   // Trigram index for typo-tolerant name matching during extraction.
   // Requires: CREATE EXTENSION IF NOT EXISTS pg_trgm;
   index("people_name_trgm_idx").using("gin", sql`${t.displayName} gin_trgm_ops`),
+  // "everyone tagged Journeymen": a GIN index answers @> and = any() on the list.
+  index("people_tags_idx").using("gin", t.tags),
 ]);
 
 /** Where you usually run into someone. Drives location-based ranking. */
@@ -368,6 +375,8 @@ export type ExtractionResult = {
     isNew: boolean;
     circle?: "family" | "friends" | "work" | "neighbors" | "other";
     role?: string;
+    /** Groups the note places them in, in the user's words. At most a few. */
+    tags?: string[];
   }[];
   facts: {
     personName: string;
@@ -396,6 +405,8 @@ export type FilingDecisions = {
     personId: string | null;
     /** Set the person's circle. Absent leaves it alone. */
     circle?: Circle;
+    /** The person's complete tag list after this note. Absent leaves it alone. */
+    tags?: string[];
   }[];
   facts: { keep: boolean }[];
   interactions: { keep: boolean }[];

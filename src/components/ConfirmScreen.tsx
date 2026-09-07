@@ -7,7 +7,7 @@ import {
   type CaptureView, type FilingDecisions, type PersonLite, type Circle, type Suggestion, type ExtractionResult,
 } from "@/lib/store";
 import { CIRCLES, circleColor, initials } from "@/lib/circles";
-import { defaultDecisions } from "@/lib/decisions";
+import { defaultDecisions, mergeTags } from "@/lib/decisions";
 import { AUTO_FILE_THRESHOLD } from "@/lib/ai/threshold";
 
 type Status = CaptureView["capture"]["status"];
@@ -75,10 +75,16 @@ export function ConfirmScreen({ id }: { id: string }) {
     if (!view || decisions) return;
     const x = view.capture.extraction;
     if (!x || ACTIVE.has(view.capture.status)) return;
-    setDecisions(view.capture.filing?.decisions ?? defaultDecisions(x, view.capture.place?.id ?? null));
+    const tagsOf = (id: string) => view.people.find((p) => p.id === id)?.tags ?? [];
+    setDecisions(view.capture.filing?.decisions ?? defaultDecisions(x, view.capture.place?.id ?? null, tagsOf));
   }, [view, decisions]);
 
   const rosterById = useMemo(() => new Map((view?.people ?? []).map((p) => [p.id, p])), [view]);
+  /** Every tag in play: the user's, plus any typed on this screen, for the suggestions under "+ tag". */
+  const tagPool = useMemo(
+    () => mergeTags(view?.tags ?? [], (decisions?.people ?? []).flatMap((d) => d.tags ?? [])),
+    [view, decisions],
+  );
 
   /* ---- edits ---- */
   const update = (fn: (d: FilingDecisions) => FilingDecisions) => {
@@ -216,6 +222,7 @@ export function ConfirmScreen({ id }: { id: string }) {
                   rosterById={rosterById}
                   roster={view.people}
                   suggestions={view.suggestions[String(i)] ?? []}
+                  tagPool={tagPool}
                   picker={picker?.kind === "person" && picker.index === i}
                   onPicker={(open) => setPicker(open ? { kind: "person", index: i } : null)}
                   onPerson={(patch) => setPerson(i, patch)}
@@ -281,7 +288,7 @@ export function ConfirmScreen({ id }: { id: string }) {
 
 /* ───────────────────────────────── people ───────────────────────────────── */
 
-function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, createdId }: {
+function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, tagPool, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, createdId }: {
   index: number;
   p: ExtractionResult["people"][number];
   i: number;
@@ -293,6 +300,7 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   rosterById: Map<string, PersonLite>;
   roster: PersonLite[];
   suggestions: Suggestion[];
+  tagPool: string[];
   picker: boolean;
   onPicker: (open: boolean) => void;
   onPerson: (patch: Partial<PersonDecision>) => void;
@@ -308,6 +316,8 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   const circle: Circle = dec.circle ?? (matched ? row.circle : row?.circle ?? p.circle ?? "other");
   const out = dec.action === "drop";
   const status = statusOf(p, dec);
+  const tags = dec.tags ?? [];
+  const [adding, setAdding] = useState(false);
 
   const facts = first ? x.facts.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
   const interactions = first ? x.interactions.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
@@ -353,6 +363,24 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
                 </button>
               ))}
             </div>
+          )}
+          {!out && (
+            <div className="tags">
+              {tags.map((t) => (
+                <span key={t} className="tg">
+                  <span>{t}</span>
+                  <button type="button" aria-label={`Remove ${t}`} onClick={() => onPerson({ tags: tags.filter((k) => k !== t) })}>×</button>
+                </span>
+              ))}
+              {!adding && <button type="button" className="act" onClick={() => setAdding(true)}>+ tag</button>}
+            </div>
+          )}
+          {adding && !out && (
+            <TagAdder
+              pool={tagPool.filter((t) => !tags.some((k) => k.toLowerCase() === t.toLowerCase()))}
+              onAdd={(t) => { onPerson({ tags: mergeTags(tags, [t]) }); setAdding(false); }}
+              onClose={() => setAdding(false)}
+            />
           )}
           {picker && !out && (
             <PersonPicker
@@ -405,6 +433,40 @@ function ItemRow({ k, text: t, keep, muted, onToggle }: { k: string; text: strin
       <span className="ik">{k}</span>
       <span className="it">{t}</span>
       {!muted && <button className="act" onClick={onToggle}>{keep ? "Drop" : "Undo"}</button>}
+    </div>
+  );
+}
+
+/**
+ * One field and the user's other tags as text to tap. Enter or a tap adds;
+ * Escape or Cancel closes. Inline, like everything else on this screen.
+ */
+function TagAdder({ pool, onAdd, onClose }: { pool: string[]; onAdd: (tag: string) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const s = q.trim().toLowerCase();
+  const shown = (s ? pool.filter((t) => t.toLowerCase().includes(s)) : pool).slice(0, 8);
+  const submit = () => { const t = q.trim(); if (t) onAdd(t); };
+  return (
+    <div className="picker">
+      <label className="field">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Group, team, club"
+          autoFocus
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={40}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } if (e.key === "Escape") onClose(); }}
+        />
+        {q.trim() && <button className="act gold" type="button" onClick={submit}>Add</button>}
+        <button className="act" type="button" onClick={onClose}>Cancel</button>
+      </label>
+      {shown.length > 0 && (
+        <div className="meta" style={{ padding: "10px 0 6px", gap: 16 }}>
+          {shown.map((t) => <button key={t} type="button" className="act" onClick={() => onAdd(t)}>{t}</button>)}
+        </div>
+      )}
     </div>
   );
 }
