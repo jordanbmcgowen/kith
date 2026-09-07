@@ -331,7 +331,7 @@ a.row:active{background:var(--rule);}
 /* Facts, interactions and follow-ups under their person, aligned with the name. */
 .items{margin:6px 0 0 54px;}
 .item{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--rule);font-size:13px;line-height:1.5;transition:opacity .3s ease;}
-.item .ik{flex:0 0 60px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);padding-top:3px;}
+.item .ik{flex:0 0 70px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);padding-top:3px;}
 .item .it{flex:1;min-width:0;}
 .item .act,.item .meta{padding-top:3px;}
 .item.off{opacity:.42;}
