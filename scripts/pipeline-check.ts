@@ -2,16 +2,16 @@
  * Runs the capture pipeline's filing logic against the REAL database with the
  * three model calls (Whisper, Claude, embeddings) replaced by stubs.
  *
- * Why: src/workers/process-capture.ts had never executed before this script
- * existed. Drizzle queries, enum values, vector inserts and upserts all look
- * fine in an editor and only fail when they hit Postgres. This makes them hit
- * Postgres, on purpose, before a deploy does.
+ * Why: src/workers/process-capture.ts and src/lib/filing.ts never execute
+ * anywhere else before a deploy. Drizzle queries, enum values, vector inserts
+ * and raw SQL all look fine in an editor and only fail when they hit Postgres.
+ * This makes them hit Postgres, on purpose, before a deploy does.
  *
  * What it touches: it inserts clearly marked rows (every name starts with
- * "PIPELINE CHECK") for the first user in the database, runs the worker
- * against them, asserts on what landed, and deletes everything it created,
- * both before it starts and after it finishes. It never touches rows it did
- * not create.
+ * "PIPELINE CHECK") for the first user in the database, runs the worker and
+ * the filing module against them, asserts on what landed, and deletes
+ * everything it created, both before it starts and after it finishes. It
+ * never touches rows it did not create.
  *
  *   npm run pipeline:check
  *
@@ -21,7 +21,9 @@ import { and, eq, like, inArray } from "drizzle-orm";
 import {
   db, users, people, captures, facts, interactions, threads, places, personPlaces, looseThreads,
 } from "../src/db";
+import type { FilingDecisions } from "../src/db/schema";
 import { processCapture, type Models } from "../src/workers/process-capture";
+import { fileCapture, reconstructFiling, reviewReason, defaultDecisions, NEW_PEOPLE_REVIEW_AT } from "../src/lib/filing";
 import type { Extraction } from "../src/lib/ai/extract";
 
 const MARK = "PIPELINE CHECK";
@@ -42,10 +44,11 @@ const fakeVector = (seed: number) => {
 };
 
 let lastExtractInput: Parameters<Models["extract"]>[0] | null = null;
+const embed: Models["embed"] = async (texts) => texts.map((_, i) => fakeVector(i + 1));
 const models = (extraction: Extraction, transcript = "stub transcript"): Models => ({
   transcribe: async () => ({ text: transcript, durationSec: 12.5 }),
   extract: async (input) => { lastExtractInput = input; return extraction; },
-  embed: async (texts) => texts.map((_, i) => fakeVector(i + 1)),
+  embed,
 });
 
 const env = {
@@ -53,6 +56,8 @@ const env = {
     get: async () => { throw new Error("AUDIO.get should not be called in this check"); },
   } as unknown as R2Bucket,
 };
+
+const empty: Extraction = { people: [], facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null };
 
 async function rowCounts(userId: string) {
   const d = db();
@@ -64,6 +69,7 @@ async function rowCounts(userId: string) {
     interactions: await n(d.select({ id: interactions.id }).from(interactions).where(eq(interactions.userId, userId))),
     threads: await n(d.select({ id: threads.id }).from(threads).where(eq(threads.userId, userId))),
     places: await n(d.select({ id: places.id }).from(places).where(eq(places.userId, userId))),
+    personPlaces: await n(d.select({ id: personPlaces.personId }).from(personPlaces).where(eq(personPlaces.userId, userId))),
     loose: await n(d.select({ id: looseThreads.id }).from(looseThreads).where(eq(looseThreads.userId, userId))),
   };
 }
@@ -76,6 +82,13 @@ async function cleanup(userId: string) {
   await d.delete(captures).where(and(eq(captures.userId, userId), like(captures.rawText, `${MARK}%`))); // cascades loose_threads
   await d.delete(places).where(and(eq(places.userId, userId), like(places.name, `${MARK}%`)));
 }
+
+const factsOf = (captureId: string) => db().select().from(facts).where(eq(facts.captureId, captureId));
+const interactionsOf = (captureId: string) => db().select().from(interactions).where(eq(interactions.captureId, captureId));
+const looseOf = (captureId: string) => db().select().from(looseThreads).where(eq(looseThreads.captureId, captureId));
+const peopleNamed = (userId: string, name: string) =>
+  db().select().from(people).where(and(eq(people.userId, userId), eq(people.displayName, name)));
+const captureRow = (id: string) => db().query.captures.findFirst({ where: eq(captures.id, id) });
 
 async function main() {
   const [user] = await db().select().from(users).limit(1);
@@ -96,6 +109,7 @@ async function main() {
     const [club] = await db().insert(places).values({
       userId, name: `${MARK} Brook Hollow Golf Club`, lat: -45.0000, lng: -130.0000, radiusM: 200, visitCount: 3,
     }).returning();
+    const DEV = `${MARK} Dev Patel`;
 
     /* ---- 1. a typed note, filed clean ---- */
     const [c1] = await db().insert(captures).values({
@@ -107,17 +121,16 @@ async function main() {
     const extraction1: Extraction = {
       people: [
         { matchedPersonId: marcus.id, name: "Marcus", confidence: 0.96, isNew: false },
-        { matchedPersonId: null, name: `${MARK} Dev Patel`, confidence: 0.9, isNew: true, circle: "neighbors", role: "runs a coffee roaster in Bishop Arts" },
-        { matchedPersonId: "not-a-real-id", name: "Ghost", confidence: 0.9, isNew: false }, // must not crash, must not file
+        { matchedPersonId: null, name: DEV, confidence: 0.9, isNew: true, circle: "neighbors", role: "runs a coffee roaster in Bishop Arts" },
       ],
       facts: [
         { personName: "Marcus", kind: "relation", content: "Daughter Priya, got into Rice early decision", confidence: 0.95 },
-        { personName: `${MARK} Dev Patel`, kind: "context", content: "Runs a coffee roaster in Bishop Arts", confidence: 0.9 },
+        { personName: DEV, kind: "context", content: "Runs a coffee roaster in Bishop Arts", confidence: 0.9 },
         { personName: "Nobody Known", kind: "context", content: "should become a loose thread, not vanish", confidence: 0.9 },
       ],
       interactions: [
         { personName: "Marcus", summary: "Ran into him at the club, talked about Priya and Rice", occurredAt: new Date().toISOString(), channel: "in_person" },
-        { personName: `${MARK} Dev Patel`, summary: "Met for the first time at the club", occurredAt: "not a date", channel: "in_person" },
+        { personName: DEV, summary: "Met for the first time at the club", occurredAt: "not a date", channel: "in_person" },
       ],
       threads: [
         { personName: "Marcus", title: "Send the Cirrus article", dueAt: new Date(Date.now() + 5 * 86_400_000).toISOString() },
@@ -127,26 +140,29 @@ async function main() {
       unresolved: ["Someone mentioned a birthday on the 14th but I missed whose"],
     };
 
-    console.log("\n1. typed note, high confidence");
+    console.log("\n1. typed note, high confidence, files itself");
     await processCapture({ captureId: c1.id, userId }, env, models(extraction1));
 
-    const after1 = await db().query.captures.findFirst({ where: eq(captures.id, c1.id) });
+    const after1 = await captureRow(c1.id);
     check("status is filed", after1?.status === "filed", after1?.status);
-    check("extraction JSON stored", !!after1?.extraction && after1.extraction.people.length === 3);
+    check("extraction JSON stored", !!after1?.extraction && after1.extraction.people.length === 2);
     check("place resolved from cache (no Google key needed)", after1?.placeId === club.id, after1?.placeId);
+    check("filing record: by auto, Dev Patel created, both people touched",
+      after1?.filing?.by === "auto" && after1.filing.created.some((c) => c.name === DEV) && after1.filing.peopleIds.length === 2 && !!after1.filing.decisions,
+      after1?.filing);
 
     const clubAfter = await db().query.places.findFirst({ where: eq(places.id, club.id) });
     check("place visit count incremented 3 -> 4", clubAfter?.visitCount === 4, clubAfter?.visitCount);
 
-    const dev = await db().query.people.findFirst({ where: and(eq(people.userId, userId), eq(people.displayName, `${MARK} Dev Patel`)) });
+    const [dev] = await peopleNamed(userId, DEV);
     check("new person created with circle", dev?.circle === "neighbors", dev?.circle);
 
-    const f = await db().select().from(facts).where(eq(facts.captureId, c1.id));
+    const f = await factsOf(c1.id);
     check("2 facts filed (orphan excluded)", f.length === 2, f.length);
     check("relation fact is pinned", f.find((x) => x.kind === "relation")?.pinned === true);
     check("facts carry a 1536-dim embedding", f.every((x) => Array.isArray(x.embedding) && x.embedding.length === DIM));
 
-    const ix = await db().select().from(interactions).where(eq(interactions.captureId, c1.id));
+    const ix = await interactionsOf(c1.id);
     check("2 interactions filed", ix.length === 2, ix.length);
     check("interaction with a bad date fell back to capturedAt", ix.every((x) => !Number.isNaN(x.occurredAt.getTime())));
     check("interactions tagged with the place", ix.every((x) => x.placeId === club.id));
@@ -157,7 +173,7 @@ async function main() {
     check("open thread closed by this capture", closed?.status === "done" && closed.closedByCaptureId === c1.id, closed?.status);
     check("new thread created with due date", !!created?.dueAt, created);
 
-    const loose = await db().select().from(looseThreads).where(eq(looseThreads.captureId, c1.id));
+    const loose = await looseOf(c1.id);
     check("2 loose threads: the unresolved line plus the orphaned fact", loose.length === 2, loose.map((l) => l.content));
 
     const marcusAfter = await db().query.people.findFirst({ where: eq(people.id, marcus.id) });
@@ -167,14 +183,16 @@ async function main() {
     check("person_places linked for both people", pp.length === 2, pp.length);
     check("model was given NOW with a weekday and a calendar", /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day, /.test(lastExtractInput?.now ?? "") && /\(today\), .*\(tomorrow\)/.test(lastExtractInput?.dateContext ?? ""), { now: lastExtractInput?.now, cal: lastExtractInput?.dateContext?.slice(0, 60) });
 
-    /* ---- 2. re-run the same capture: the upsert path must not blow up ---- */
+    /* ---- 2. re-run the same capture: replace, never double ---- */
     console.log("\n2. same capture processed again (what a queue retry looks like)");
     await processCapture({ captureId: c1.id, userId }, env, models(extraction1));
     const pp2 = await db().select().from(personPlaces).where(and(eq(personPlaces.placeId, club.id), eq(personPlaces.personId, marcus.id)));
-    check("person_places weight upserted 1 -> 2", pp2[0]?.weight === 2, pp2[0]?.weight);
-    const f2 = await db().select().from(facts).where(eq(facts.captureId, c1.id));
-    const ix2 = await db().select().from(interactions).where(eq(interactions.captureId, c1.id));
-    const loose2 = await db().select().from(looseThreads).where(eq(looseThreads.captureId, c1.id));
+    check("person_places weight rebuilt from interactions, still 1", pp2[0]?.weight === 1, pp2[0]?.weight);
+    const devs2 = await peopleNamed(userId, DEV);
+    check("the new person was reused, not created twice", devs2.length === 1 && devs2[0].id === dev.id, devs2.length);
+    const f2 = await factsOf(c1.id);
+    const ix2 = await interactionsOf(c1.id);
+    const loose2 = await looseOf(c1.id);
     check("re-run replaced rather than duplicated: still 2 facts, 2 interactions, 2 loose", f2.length === 2 && ix2.length === 2 && loose2.length === 2, [f2.length, ix2.length, loose2.length]);
 
     /* ---- 3. a voice capture retried after transcription already succeeded ---- */
@@ -186,24 +204,167 @@ async function main() {
     }).returning();
     await db().update(captures).set({ rawText: null }).where(eq(captures.id, c3.id));
     await processCapture({ captureId: c3.id, userId }, env, models({
-      ...extraction1, people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.99, isNew: false }],
-      facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
+      ...empty, people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.99, isNew: false }],
     }));
-    const after3 = await db().query.captures.findFirst({ where: eq(captures.id, c3.id) });
+    const after3 = await captureRow(c3.id);
     check("did not throw 'Empty transcript', filed from the saved transcript", after3?.status === "filed", after3?.status);
     await db().delete(captures).where(eq(captures.id, c3.id));
 
-    /* ---- 4. low confidence goes to needs_review ---- */
-    console.log("\n4. low confidence match");
+    /* ---- 4. low confidence waits, and files nothing until confirmed ---- */
+    console.log("\n4. low confidence match: stored, nothing filed");
     const [c4] = await db().insert(captures).values({
       userId, kind: "text", status: "uploaded", rawText: `${MARK} maybe Marcus, maybe not`, capturedAt: new Date(),
     }).returning();
-    await processCapture({ captureId: c4.id, userId }, env, models({
+    const extraction4: Extraction = {
+      ...empty,
       people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.6, isNew: false }],
-      facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
-    }));
-    const after4 = await db().query.captures.findFirst({ where: eq(captures.id, c4.id) });
+      facts: [{ personName: "Marcus", kind: "context", content: "Thinking about a new plane", confidence: 0.8 }],
+      interactions: [{ personName: "Marcus", summary: "Quick chat", occurredAt: new Date().toISOString(), channel: "call" }],
+    };
+    await processCapture({ captureId: c4.id, userId }, env, models(extraction4));
+    const after4 = await captureRow(c4.id);
     check("status is needs_review", after4?.status === "needs_review", after4?.status);
+    check("extraction stored, no filing record yet", after4?.extraction?.people.length === 1 && after4.filing == null);
+    check("nothing filed: 0 facts, 0 interactions, 0 loose", (await factsOf(c4.id)).length === 0 && (await interactionsOf(c4.id)).length === 0 && (await looseOf(c4.id)).length === 0);
+
+    console.log("   ...then confirmed as proposed");
+    const r4 = await fileCapture({ userId, captureId: c4.id, by: "user", embed });
+    const after4b = await captureRow(c4.id);
+    check("confirm files it: status filed, by user", after4b?.status === "filed" && after4b.filing?.by === "user", after4b?.filing);
+    check("1 fact and 1 interaction landed on Marcus", (await factsOf(c4.id)).length === 1 && (await interactionsOf(c4.id)).length === 1);
+    check("counts reported", r4.counts.people === 1 && r4.counts.facts === 1, r4.counts);
+    await fileCapture({ userId, captureId: c4.id, by: "user", embed });
+    check("confirming again changes nothing: still 1 fact, 1 interaction", (await factsOf(c4.id)).length === 1 && (await interactionsOf(c4.id)).length === 1);
+
+    /* ---- 9. a waiting note confirmed with fixes, then fixed again ---- */
+    console.log("\n9. waiting note filed with edits: circle, dropped fact, attached and dismissed loose threads, cleared place");
+    const DEV2 = `${MARK} Dev Patel 2`;
+    const [c9] = await db().insert(captures).values({
+      userId, kind: "text", status: "uploaded", rawText: `${MARK} met another Dev`,
+      placeHint: "pipeline check brook hollow", capturedAt: new Date(),
+    }).returning();
+    const extraction9: Extraction = {
+      ...empty,
+      people: [{ matchedPersonId: null, name: DEV2, confidence: 0.5, isNew: true, circle: "other", role: "the other Dev" }],
+      facts: [
+        { personName: DEV2, kind: "context", content: "Keep this one", confidence: 0.9 },
+        { personName: DEV2, kind: "context", content: "Drop this one", confidence: 0.9 },
+      ],
+      interactions: [{ personName: DEV2, summary: "Met at the club", occurredAt: new Date().toISOString(), channel: "in_person" }],
+      unresolved: [`${MARK} loose a, goes to Marcus`, `${MARK} loose b, dismissed`],
+    };
+    await processCapture({ captureId: c9.id, userId }, env, models(extraction9));
+    const after9 = await captureRow(c9.id);
+    check("waits: needs_review with the typed place resolved", after9?.status === "needs_review" && after9.placeId === club.id, [after9?.status, after9?.placeId]);
+    check("no person created while waiting", (await peopleNamed(userId, DEV2)).length === 0);
+
+    const decisions9: FilingDecisions = {
+      ...defaultDecisions(extraction9, club.id),
+      people: [{ action: "new", personId: null, circle: "work" }],
+      facts: [{ keep: true }, { keep: false }],
+      unresolved: [{ personId: marcus.id, dismissed: false }, { personId: null, dismissed: true }],
+      place: { placeId: null, name: null },
+    };
+    await fileCapture({ userId, captureId: c9.id, decisions: decisions9, by: "user", embed });
+    const [dev2] = await peopleNamed(userId, DEV2);
+    const after9b = await captureRow(c9.id);
+    const f9 = await factsOf(c9.id);
+    const loose9 = await looseOf(c9.id);
+    check("new person created with the chosen circle", dev2?.circle === "work", dev2?.circle);
+    check("dropped fact stayed out; attached loose thread became a fact on Marcus",
+      f9.length === 2 && f9.some((x) => x.personId === dev2?.id && x.content === "Keep this one") && f9.some((x) => x.personId === marcus.id && x.kind === "context" && x.content.includes("loose a")),
+      f9.map((x) => [x.content, x.personId === marcus.id ? "marcus" : "dev2"]));
+    check("loose rows: one resolved to Marcus, one dismissed",
+      loose9.length === 2 && loose9.some((l) => l.resolvedPersonId === marcus.id) && loose9.some((l) => l.dismissedAt != null), loose9);
+    const ix9 = await interactionsOf(c9.id);
+    check("place cleared: capture and interaction carry none", after9b?.placeId == null && ix9.length === 1 && ix9[0].placeId == null, [after9b?.placeId, ix9[0]?.placeId]);
+    check("decisions stored with the created person's id", after9b?.filing?.decisions?.people[0].personId === dev2?.id && after9b?.filing?.created[0]?.personId === dev2?.id, after9b?.filing);
+    const dev2Warm = await db().query.people.findFirst({ where: eq(people.id, dev2.id) });
+    check("new person's last seen came from the interaction", !!dev2Warm?.lastInteractionAt);
+
+    console.log("   ...then that person is left out");
+    await fileCapture({ userId, captureId: c9.id, decisions: { ...after9b!.filing!.decisions!, people: [{ action: "drop", personId: dev2.id }] }, by: "user", embed });
+    check("person row this note created is gone", (await peopleNamed(userId, DEV2)).length === 0);
+    const f9b = await factsOf(c9.id);
+    check("only the attached fact on Marcus remains; the interaction is gone", f9b.length === 1 && f9b[0].personId === marcus.id && (await interactionsOf(c9.id)).length === 0, f9b.length);
+
+    console.log("   ...then brought back as new, twice");
+    const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, circle: "work" }] };
+    await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
+    await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
+    const dev2s = await peopleNamed(userId, DEV2);
+    check("exactly one row again, with its circle", dev2s.length === 1 && dev2s[0].circle === "work", dev2s.length);
+    check("2 facts, 1 interaction, 2 loose, no duplicates", (await factsOf(c9.id)).length === 2 && (await interactionsOf(c9.id)).length === 1 && (await looseOf(c9.id)).length === 2);
+
+    /* ---- 10. a re-run asks for a look, and keeps what was filed until it gets one ---- */
+    console.log("\n10. re-run with review: true on a note that filed itself");
+    await processCapture({ captureId: c1.id, userId, review: true }, env, models(extraction1));
+    const after10 = await captureRow(c1.id);
+    check("status is needs_review", after10?.status === "needs_review", after10?.status);
+    check("old rows still there: 2 facts", (await factsOf(c1.id)).length === 2);
+    check("filing kept what it created, decisions dropped", !!after10?.filing?.created.some((c) => c.personId === dev.id) && after10?.filing?.decisions === null, after10?.filing);
+    await fileCapture({ captureId: c1.id, userId, by: "user", embed });
+    check("confirmed: filed, one Dev Patel, 2 facts", (await captureRow(c1.id))?.status === "filed" && (await peopleNamed(userId, DEV)).length === 1 && (await factsOf(c1.id)).length === 2);
+
+    /* ---- 11. notes filed before the filing record existed ---- */
+    console.log("\n11. legacy note: person rows found by name and time, removed on leave out when unreferenced");
+    const LEGACY = `${MARK} Legacy Person`;
+    const KEPT = `${MARK} Legacy Kept`;
+    const extraction11: Extraction = {
+      ...empty,
+      people: [
+        { matchedPersonId: null, name: LEGACY, confidence: 0.9, isNew: true },
+        { matchedPersonId: null, name: KEPT, confidence: 0.9, isNew: true },
+      ],
+      facts: [
+        { personName: LEGACY, kind: "context", content: "old fact", confidence: 0.9 },
+        { personName: KEPT, kind: "context", content: "old fact on the kept one", confidence: 0.9 },
+      ],
+    };
+    const [c11] = await db().insert(captures).values({
+      userId, kind: "text", status: "needs_review", rawText: `${MARK} legacy`, capturedAt: new Date(), extraction: extraction11,
+    }).returning();
+    const [legacy] = await db().insert(people).values({ userId, displayName: LEGACY }).returning();
+    const [kept] = await db().insert(people).values({ userId, displayName: KEPT }).returning();
+    await db().insert(facts).values([
+      { userId, personId: legacy.id, kind: "context", content: "old fact", captureId: c11.id },
+      { userId, personId: kept.id, kind: "context", content: "old fact on the kept one", captureId: c11.id },
+      { userId, personId: kept.id, kind: "context", content: "a fact from some other note", captureId: c1.id },
+    ]);
+    const recon = await reconstructFiling(userId, (await captureRow(c11.id))!);
+    check("reconstruction: both rows recognised as created by this note", recon.by === "legacy" && recon.created.length === 2 && recon.peopleIds.length === 2, recon);
+    const fresh = await captureRow(c4.id);
+    check("a note that never filed rows reconstructs nothing", (await reconstructFiling(userId, { ...fresh!, extraction: extraction1 })).created.length === 0);
+    await fileCapture({ userId, captureId: c11.id, decisions: { ...defaultDecisions(extraction11, null), people: [{ action: "drop", personId: null }, { action: "drop", personId: null }] }, by: "user", embed });
+    check("unreferenced legacy person removed", (await peopleNamed(userId, LEGACY)).length === 0);
+    const keptRows = await peopleNamed(userId, KEPT);
+    const keptFacts = await db().select().from(facts).where(eq(facts.personId, kept.id));
+    check("legacy person another note wrote about survives, with that note's fact", keptRows.length === 1 && keptFacts.length === 1 && keptFacts[0].captureId === c1.id, [keptRows.length, keptFacts.length]);
+
+    /* ---- 12. many new people wait ---- */
+    console.log("\n12. review reasons");
+    const three: Extraction = { ...empty, people: [1, 2, 3].map((i) => ({ matchedPersonId: null, name: `${MARK} Roster ${i}`, confidence: 0.95, isNew: true })) };
+    check(`${NEW_PEOPLE_REVIEW_AT} new people wait even at 95%`, reviewReason(three) !== null, reviewReason(three));
+    check("two new people at 95% file themselves", reviewReason({ ...three, people: three.people.slice(0, 2) }) === null);
+    check("a hedged person (no match, not new) waits", reviewReason({ ...empty, people: [{ matchedPersonId: null, name: "?", confidence: 0.95, isNew: false }] }) !== null);
+    const [c12] = await db().insert(captures).values({ userId, kind: "text", status: "uploaded", rawText: `${MARK} roster`, capturedAt: new Date() }).returning();
+    await processCapture({ captureId: c12.id, userId }, env, models(three));
+    check("roster note stops at needs_review with nobody created", (await captureRow(c12.id))?.status === "needs_review" && (await peopleNamed(userId, `${MARK} Roster 1`)).length === 0);
+
+    /* ---- 13. warmth follows the interaction's date, not the note's ---- */
+    console.log("\n13. a note today about a meeting 200 days ago");
+    const OLD = `${MARK} Old Friend`;
+    const [old] = await db().insert(people).values({ userId, displayName: OLD, circle: "friends" }).returning();
+    const then = new Date(Date.now() - 200 * 86_400_000);
+    const [c13] = await db().insert(captures).values({ userId, kind: "text", status: "uploaded", rawText: `${MARK} old meeting`, capturedAt: new Date() }).returning();
+    await processCapture({ captureId: c13.id, userId }, env, models({
+      ...empty,
+      people: [{ matchedPersonId: old.id, name: OLD, confidence: 0.99, isNew: false }],
+      interactions: [{ personName: OLD, summary: "Coffee, back in the spring", occurredAt: then.toISOString(), channel: "in_person" }],
+    }));
+    const oldAfter = await db().query.people.findFirst({ where: eq(people.id, old.id) });
+    check("last seen is the meeting's date", !!oldAfter?.lastInteractionAt && Math.abs(oldAfter.lastInteractionAt.getTime() - then.getTime()) < 60_000, oldAfter?.lastInteractionAt);
+    check("warmth reflects 200 days of silence", (oldAfter?.warmth ?? 100) < 20, oldAfter?.warmth);
 
     /* ---- 6. a typed place name finds an existing place, fuzzily ---- */
     console.log("\n6. typed place, lowercase and partial, matches the known club");
@@ -212,11 +373,11 @@ async function main() {
       placeHint: "pipeline check brook hollow", lat: -45.0002, lng: -130.0002, capturedAt: new Date(),
     }).returning();
     await processCapture({ captureId: c6.id, userId }, env, models({
+      ...empty,
       people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.97, isNew: false }],
-      facts: [], interactions: [{ personName: "Marcus", summary: "Saw him at the club", occurredAt: new Date().toISOString(), channel: "in_person" }],
-      threads: [], closesThreadIds: [], unresolved: [], place: null,
+      interactions: [{ personName: "Marcus", summary: "Saw him at the club", occurredAt: new Date().toISOString(), channel: "in_person" }],
     }));
-    const after6 = await db().query.captures.findFirst({ where: eq(captures.id, c6.id) });
+    const after6 = await captureRow(c6.id);
     check("resolved to the existing club by name, no new place", after6?.placeId === club.id, after6?.placeId);
     const placesNow = await db().select().from(places).where(and(eq(places.userId, userId), like(places.name, `${MARK}%`)));
     check("still exactly one place row", placesNow.length === 1, placesNow.map((p) => p.name));
@@ -228,14 +389,14 @@ async function main() {
       placeHint: `${MARK} Alex's Parents`, capturedAt: new Date(),
     }).returning();
     await processCapture({ captureId: c7.id, userId }, env, models({
+      ...empty,
       people: [{ matchedPersonId: marcus.id, name: "Marcus", confidence: 0.97, isNew: false }],
-      facts: [], interactions: [{ personName: "Marcus", summary: "Dinner", occurredAt: new Date().toISOString(), channel: "in_person" }],
-      threads: [], closesThreadIds: [], unresolved: [], place: null,
+      interactions: [{ personName: "Marcus", summary: "Dinner", occurredAt: new Date().toISOString(), channel: "in_person" }],
     }));
     const parents = await db().query.places.findFirst({ where: and(eq(places.userId, userId), eq(places.name, `${MARK} Alex's Parents`)) });
     check("new place created from the typed name", !!parents, parents);
     check("new place has no coordinates", parents?.lat == null && parents?.lng == null);
-    const ix7 = await db().select().from(interactions).where(eq(interactions.captureId, c7.id));
+    const ix7 = await interactionsOf(c7.id);
     check("interaction tagged with the new place and no coordinates", ix7[0]?.placeId === parents?.id && ix7[0]?.lat == null);
 
     /* ---- 8. naming the place you are at teaches its coordinates ---- */
@@ -244,19 +405,15 @@ async function main() {
       userId, kind: "text", status: "uploaded", rawText: `${MARK} at the range`,
       placeHint: `${MARK} Alex's Parents`, lat: -46.0000, lng: -131.0000, capturedAt: new Date(),
     }).returning();
-    await processCapture({ captureId: c8.id, userId }, env, models({
-      people: [], facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
-    }));
+    await processCapture({ captureId: c8.id, userId }, env, models(empty));
     const learned = await db().query.places.findFirst({ where: eq(places.id, parents!.id) });
     check("existing place learned coordinates from a visit there", learned?.lat === -46 && learned?.lng === -131, [learned?.lat, learned?.lng]);
     const [c8b] = await db().insert(captures).values({
       userId, kind: "text", status: "uploaded", rawText: `${MARK} back at the range, no name typed`,
       lat: -46.0003, lng: -131.0002, capturedAt: new Date(),
     }).returning();
-    await processCapture({ captureId: c8b.id, userId }, env, models({
-      people: [], facts: [], interactions: [], threads: [], closesThreadIds: [], unresolved: [], place: null,
-    }));
-    const after8b = await db().query.captures.findFirst({ where: eq(captures.id, c8b.id) });
+    await processCapture({ captureId: c8b.id, userId }, env, models(empty));
+    const after8b = await captureRow(c8b.id);
     check("coordinates alone now match the learned place", after8b?.placeId === parents?.id, after8b?.placeId);
 
     /* ---- 5. silence is a permanent failure, not three retries ---- */

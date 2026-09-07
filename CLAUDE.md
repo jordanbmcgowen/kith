@@ -76,9 +76,40 @@ Built, step 2 of the build order (record and upload):
   calendar, because it cannot reliably compute weekdays from an ISO
   timestamp. "By Friday" was landing on Saturday before this.
 
+Built, step 3 of the build order (the confirmation screen):
+
+- `src/lib/filing.ts`: filing is its own module, called by the worker and by
+  the confirm endpoint with the same code. It takes the extraction stored on
+  the capture plus `FilingDecisions` (per person: match, new, or drop, plus
+  circle; per fact, interaction, follow-up: keep or drop; per loose thread:
+  attach or dismiss; place: keep, name, or clear) and writes the rows. It
+  records what it did in `captures.filing` (the people it created, the people
+  it touched, the decisions), so running it again replaces instead of
+  doubling, reuses the person rows it created, and removes those a re-file no
+  longer uses when nothing else refers to them. Warmth and last seen come from
+  the interaction's date, and `person_places` is rebuilt from interactions.
+- Hybrid filing. Every person at or above `AUTO_FILE_THRESHOLD` files itself.
+  Anything below, a person the model could not place, or a note that would
+  add `NEW_PEOPLE_REVIEW_AT` (3) people at once stops at `needs_review` with
+  the extraction stored and nothing written. A queue message with
+  `review: true` always stops there; that is what a re-run does.
+- `GET /api/v1/captures/:id`, `POST .../confirm`, `POST .../rerun`.
+- `src/components/ConfirmScreen.tsx` at `/notes/[id]`: the prototype's
+  "Here's what I got", one block per person with the circle as one tap, the
+  facts under each person with drop and undo, loose threads with attach and
+  dismiss, the place, then File it (waiting) or Done (filed). Tapping a
+  Recent row opens it. `ReviewCount` in the status bar reads "2 to review"
+  while anything is waiting.
+- Notes filed before `captures.filing` existed get a reconstructed record on
+  read (`reconstructFiling`): person rows added within half an hour of the
+  note whose names appear in its extraction count as created by it.
+- The extraction prompt says who counts as a person (not someone mentioned in
+  passing) and what confidence means for a new person (that they are distinct
+  from every candidate).
+
 Not built yet:
 
-- The confirmation screen (step 3), person detail, search, the tab bar.
+- Person detail, search, the tab bar.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
@@ -95,6 +126,7 @@ Do not skip ahead. Each step is testable on its own.
    `/api/v1/captures`. Verify with `wrangler tail kith-processor`.
 3. The confirmation screen. Render the `extraction` JSON from the capture row.
    This screen decides whether the product feels like magic or homework.
+   Built; see above.
 4. Person detail, read only.
 5. Search. The API already works once there are ~30 embedded facts.
 6. Then, and only then, Google Calendar and Contacts sync.

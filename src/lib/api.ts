@@ -23,3 +23,7 @@ export function route<Ctx>(fn: (req: Request, ctx: Ctx) => Promise<Response>) {
     }
   };
 }
+
+/** Postgres throws on a malformed uuid; a bad id in a URL is a 404, not a 500. */
+export const isUuid = (s: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);

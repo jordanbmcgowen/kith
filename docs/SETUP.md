@@ -88,8 +88,15 @@ wrangler secret put DATABASE_URL      # the POOLED string
 wrangler secret put AUTH_SECRET
 wrangler secret put AUTH_GOOGLE_ID
 wrangler secret put AUTH_GOOGLE_SECRET
-wrangler secret put ANTHROPIC_API_KEY
-wrangler secret put OPENAI_API_KEY
+wrangler secret put OPENAI_API_KEY    # the app embeds what the confirmation screen files
+```
+
+And on the processor, which runs the models:
+
+```bash
+wrangler secret put DATABASE_URL --config wrangler.worker.jsonc
+wrangler secret put ANTHROPIC_API_KEY --config wrangler.worker.jsonc
+wrangler secret put OPENAI_API_KEY --config wrangler.worker.jsonc
 ```
 
 ### 6. Deploy
@@ -128,8 +135,14 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    (or `needs_review`). The Recent list on the record screen shows the same
    progression. Before deploying a worker change, `npm run pipeline:check`
    runs the filing logic against the real database with the models stubbed.
-3. **Confirmation screen.** Render the `extraction` JSON from the capture row.
-   This is where the product either feels like magic or feels like homework.
+3. **Confirmation screen.** Built. Tap a note in Recent to open it at
+   `/notes/<id>`. A note whose people all cleared the confidence line filed
+   itself and shows what landed; anything less certain waited, and File it
+   commits it. Every fix is a tap: someone else, leave out, a circle, drop a
+   fact, attach or dismiss a loose thread, clear the place. The app Worker
+   needs `OPENAI_API_KEY` too (`wrangler secret put OPENAI_API_KEY --config
+   wrangler.jsonc`), because filing embeds what it writes. "Read it again"
+   re-runs extraction on a note and stops at needs review.
 4. **Person detail.** Read path only. Facts, timeline, threads.
 5. **Search.** `/api/v1/search` is already written and works once you have
    twenty or thirty facts embedded.

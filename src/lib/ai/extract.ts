@@ -66,6 +66,8 @@ const SYSTEM = `You turn a person's spoken notes about their own life into struc
 
 Rules:
 - Only match a person to an id from CANDIDATES. Never invent an id. If the person is not in the list, set matchedPersonId to null and isNew to true.
+- A person entry is for someone the speaker dealt with directly in this note, or is describing on their own terms so they can be remembered later (a list of names counts). Someone who only comes up while talking about somebody else, such as a spouse, a child, a sibling, a boss or a friend of theirs, is not a person entry. Keep them as a fact on the person they belong to, in the speaker's words ("Daughter Priya, got into Rice early decision"), kind "relation" for family and "context" otherwise. Make them their own entry only if the speaker actually talked with them or clearly wants to track them on their own.
+- confidence means two different things. For a matched person it is how sure you are that this is the candidate whose id you gave. For a new person it is how sure you are that this is a distinct person who is not already in CANDIDATES under another spelling, a nickname, a first name only, or a description. Knowing little about a new person is not a reason to lower it; a name close to a candidate's is.
 - Prefer candidates marked nearHere when a name is ambiguous, but say so in confidence rather than guessing high.
 - A fact is something durable and true about the person: family, preferences, history, situation. "He seemed tired" is not a fact. "His mother is ill" is.
 - Kind "sensitive" is for things to handle with care: health, grief, subjects to avoid. Mark them so, do not omit them.
@@ -156,8 +158,8 @@ export async function extract(input: {
   return parsed.data;
 }
 
-/** Confidence below this goes to needs_review instead of filing itself. */
-export const AUTO_FILE_THRESHOLD = 0.82;
+/** Confidence below this goes to needs_review instead of filing itself. Lives in threshold.ts. */
+export { AUTO_FILE_THRESHOLD } from "./threshold";
 
 const TOOL_SCHEMA = {
   type: "object",
