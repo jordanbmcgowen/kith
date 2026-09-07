@@ -18,6 +18,8 @@ export const GET = route(async (req: Request) => {
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
   if (q.length < 2) return NextResponse.json({ results: [] });
 
+  // Step 5: the app has no OpenAI key. Swap this for
+  // embedVia(getCloudflareContext().env.PROCESSOR, [q]), as the confirm route does.
   const [vec] = await embed([q]);
   const v = sql.raw(`'[${vec.join(",")}]'::vector`);
 

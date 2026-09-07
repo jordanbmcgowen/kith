@@ -5,21 +5,32 @@
  * Kept off the request path so the phone never waits, and so a model outage
  * delays notes rather than losing them.
  *
+ * It transcribes, resolves the place, and runs extraction. Filing itself lives
+ * in src/lib/filing.ts, because the confirmation screen files too: a note
+ * whose people all clear AUTO_FILE_THRESHOLD files here on its own; anything
+ * less certain stops at needs_review with the extraction stored and nothing
+ * written, and files when the user taps File it.
+ *
  * Secrets (DATABASE_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY) are read through
  * process.env, which Cloudflare populates from Worker secrets when
  * nodejs_compat is on and the compatibility date is 2025-04-01 or later.
  * Both are set in wrangler.worker.jsonc.
  */
-import { db, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads } from "../db";
+import { db, users, captures, people, threads, places, personPlaces } from "../db";
 import { transcribe } from "../lib/ai/transcribe";
-import { extract, AUTO_FILE_THRESHOLD, type Candidate } from "../lib/ai/extract";
-import { embed } from "../lib/ai/embed";
-import { warmth, cadenceFor } from "../lib/warmth";
-import { bbox, haversineM } from "../lib/geo";
+import { extract, type Candidate } from "../lib/ai/extract";
+import { embed, EMBED_MAX_TEXTS } from "../lib/ai/embed";
 import { audioExtension } from "../lib/audio";
-import { and, eq, gte, lte, isNull, sql } from "drizzle-orm";
+import { resolvePlace, resolvePlaceByName } from "../lib/places";
+import { fileCapture, reconstructFiling, reviewReason } from "../lib/filing";
+import { and, eq, isNull } from "drizzle-orm";
 
-type Msg = { captureId: string; userId: string };
+export type Msg = {
+  captureId: string;
+  userId: string;
+  /** Stop at needs_review whatever the confidence. Set when the user asks for a re-run. */
+  review?: boolean;
+};
 
 /** How many deliveries before a capture is left `failed` and visible. */
 const MAX_ATTEMPTS = 3;
@@ -41,6 +52,23 @@ const isPermanent = (err: unknown) => {
 };
 
 export default {
+  /**
+   * Reached only over the app's PROCESSOR service binding: this Worker has no
+   * public hostname (workers_dev and preview_urls are off in its config).
+   * POST /embed with { texts } returns { vectors }, so the confirmation
+   * screen can file with embeddings while the OpenAI key stays here.
+   */
+  async fetch(req: Request) {
+    const url = new URL(req.url);
+    if (req.method !== "POST" || url.pathname !== "/embed") return new Response("Not found", { status: 404 });
+    const body = (await req.json().catch(() => null)) as { texts?: unknown } | null;
+    const texts = body?.texts;
+    if (!Array.isArray(texts) || texts.length > EMBED_MAX_TEXTS || !texts.every((t) => typeof t === "string")) {
+      return new Response("Expected { texts: string[] }", { status: 400 });
+    }
+    return Response.json({ vectors: await embed(texts) });
+  },
+
   async queue(batch: MessageBatch<Msg>, env: Env) {
     for (const msg of batch.messages) {
       const { captureId } = msg.body;
@@ -78,7 +106,8 @@ export default {
 export type Models = { transcribe: typeof transcribe; extract: typeof extract; embed: typeof embed };
 const LIVE: Models = { transcribe, extract, embed };
 
-export async function processCapture({ captureId, userId }: Msg, env: Env, models: Models = LIVE) {
+export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) {
+  const { captureId, userId } = msg;
   const capture = await db().query.captures.findFirst({
     where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
   });
@@ -90,14 +119,13 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
     limit: 500,
   });
 
-  // The user's own timezone and cadences. Multi-tenant from day one means
-  // nothing about Dallas is allowed to be hardcoded here.
+  // The user's own timezone. Multi-tenant from day one means nothing about
+  // Dallas is allowed to be hardcoded here.
   const prefs = await db().query.users.findFirst({
     where: eq(users.id, userId),
-    columns: { timezone: true, cadenceDefaults: true },
+    columns: { timezone: true },
   });
   const timezone = prefs?.timezone ?? "America/Chicago";
-  const cadenceDefaults = prefs?.cadenceDefaults ?? { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
 
   /* 1. transcribe ------------------------------------------------------- */
   // A retry after a successful transcription must reuse it, not start from
@@ -131,14 +159,17 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
   if (!transcript.trim()) throw new PermanentError("Empty transcript. Nothing was said, or the microphone was muted.");
 
   /* 2. resolve place ---------------------------------------------------- */
-  // A typed place name wins. Coordinates alone mean "I am there now" and go
+  // A place already on the note (a re-run, or a retry) is kept as is. Else a
+  // typed place name wins. Coordinates alone mean "I am there now" and go
   // through proximity matching (then Google, if a key is set). No hint and
   // no coordinates means the note is filed without a place.
-  const place = capture.placeHint
-    ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng)
-    : capture.lat != null && capture.lng != null
-      ? await resolvePlace(userId, capture.lat, capture.lng, env)
-      : null;
+  const place = capture.placeId
+    ? (await db().query.places.findFirst({ where: and(eq(places.id, capture.placeId), eq(places.userId, userId)) })) ?? null
+    : capture.placeHint
+      ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng)
+      : capture.lat != null && capture.lng != null
+        ? await resolvePlace(userId, capture.lat, capture.lng, env.GOOGLE_PLACES_KEY)
+        : null;
 
   /* 3. extract ---------------------------------------------------------- */
   console.log(`[capture ${captureId}] extract (${roster.length} candidates, place: ${place?.name ?? "none"})`);
@@ -155,9 +186,16 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
     goesBy: p.goesBy,
     circle: p.circle,
     role: p.role,
+    tags: p.tags,
     nearHere: nearIds.has(p.id),
     topFacts: p.facts.map((f) => f.content),
   }));
+
+  // The user's tags, most used first, so the model reuses a spelling instead
+  // of inventing "Young Life" next to "YoungLife".
+  const tagCounts = new Map<string, number>();
+  for (const p of roster) for (const t of p.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([t]) => t);
 
   const open = await db().query.threads.findMany({
     where: and(eq(threads.userId, userId), eq(threads.status, "open")),
@@ -174,6 +212,7 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
     dateContext: upcomingDays(capture.capturedAt, timezone, 14),
     placeName: place?.name ?? null,
     candidates,
+    tags,
     openThreads: open.map((t) => ({
       id: t.id,
       personName: roster.find((p) => p.id === t.personId)?.displayName ?? "",
@@ -181,126 +220,28 @@ export async function processCapture({ captureId, userId }: Msg, env: Env, model
     })),
   });
 
-  /* 4. file ------------------------------------------------------------- */
-  // Everything below is derived from this capture and re-runnable. A retry
-  // after a partial failure, or a deliberate re-extraction, replaces what
-  // this capture filed before rather than appending a second copy.
-  await db().delete(facts).where(and(eq(facts.userId, userId), eq(facts.captureId, captureId)));
-  await db().delete(interactions).where(and(eq(interactions.userId, userId), eq(interactions.captureId, captureId)));
-  await db().delete(threads).where(and(eq(threads.userId, userId), eq(threads.createdFromCaptureId, captureId)));
-  await db().delete(looseThreads).where(and(eq(looseThreads.userId, userId), eq(looseThreads.captureId, captureId)));
+  /* 4. store it, then file it or wait ----------------------------------- */
+  // A note that filed before keeps the record of what it created, so the next
+  // filing can reuse or remove those rows. Its decisions are dropped: they
+  // were made against the previous extraction and no longer line up.
+  const carried = capture.filing ?? (capture.extraction ? await reconstructFiling(userId, capture) : null);
+  const reason = msg.review ? "re-run, waiting for a look" : reviewReason(result);
 
-  let lowConfidence = result.people.some((p) => p.confidence < AUTO_FILE_THRESHOLD);
-  const nameToId = new Map<string, string>();
-  // Anything the model attached to a person it could neither match nor call
-  // new lands here, so it becomes a loose thread instead of vanishing.
-  const unresolved = [...result.unresolved];
-
-  for (const p of result.people) {
-    if (p.matchedPersonId) { nameToId.set(p.name, p.matchedPersonId); continue; }
-    if (!p.isNew) { lowConfidence = true; continue; }
-    const [row] = await db().insert(people).values({
-      userId,
-      displayName: p.name,
-      circle: p.circle ?? "other",
-      role: p.role ?? null,
-    }).returning();
-    nameToId.set(p.name, row.id);
-  }
-
-  const orphan = (personName: string, content: string) => {
-    unresolved.push(`${personName}: ${content}`);
-  };
-
-  const factRows = result.facts
-    .filter((f) => nameToId.has(f.personName) || (orphan(f.personName, f.content), false))
-    .map((f) => ({
-      userId, personId: nameToId.get(f.personName)!, kind: f.kind,
-      content: f.content, confidence: f.confidence, captureId,
-      pinned: f.kind === "relation" || f.kind === "identity" || f.kind === "sensitive",
-      embedding: null as number[] | null,
-    }));
-
-  const interactionRows = result.interactions
-    .filter((i) => nameToId.has(i.personName) || (orphan(i.personName, i.summary), false))
-    .map((i) => ({
-      userId, personId: nameToId.get(i.personName)!, captureId,
-      placeId: place?.id ?? null,
-      occurredAt: safeDate(i.occurredAt, capture.capturedAt), channel: i.channel,
-      // The place's coordinates when it has them, else the note's own.
-      summary: i.summary, lat: place?.lat ?? capture.lat, lng: place?.lng ?? capture.lng,
-      embedding: null as number[] | null,
-    }));
-
-  // Embed facts and interactions together so search covers both.
-  const vectors = await models.embed([...factRows.map((f) => f.content), ...interactionRows.map((i) => i.summary)]);
-  factRows.forEach((f, i) => { f.embedding = vectors[i] ?? null; });
-  interactionRows.forEach((r, i) => { r.embedding = vectors[factRows.length + i] ?? null; });
-
-  if (factRows.length) await db().insert(facts).values(factRows);
-  if (interactionRows.length) await db().insert(interactions).values(interactionRows);
-
-  for (const t of result.threads) {
-    if (!nameToId.has(t.personName)) { orphan(t.personName, t.title); continue; }
-    await db().insert(threads).values({
-      userId, personId: nameToId.get(t.personName)!, title: t.title,
-      dueAt: t.dueAt ? safeDate(t.dueAt, null) : null, createdFromCaptureId: captureId,
-    });
-  }
-
-  for (const id of result.closesThreadIds) {
-    await db().update(threads)
-      .set({ status: "done", completedAt: new Date(), closedByCaptureId: captureId })
-      .where(and(eq(threads.id, id), eq(threads.userId, userId)));
-  }
-
-  for (const text of unresolved) {
-    await db().insert(looseThreads).values({ userId, captureId, content: text });
-  }
-
-  /* 5. bookkeeping ------------------------------------------------------ */
-  for (const personId of new Set(interactionRows.map((r) => r.personId))) {
-    const person = roster.find((p) => p.id === personId);
-    const recent = await db().select({ n: sql<number>`count(*)` }).from(interactions)
-      .where(and(eq(interactions.personId, personId),
-                 gte(interactions.occurredAt, new Date(Date.now() - 90 * 86_400_000))));
-
-    await db().update(people).set({
-      lastInteractionAt: capture.capturedAt,
-      updatedAt: new Date(),
-      warmth: warmth({
-        lastInteractionAt: capture.capturedAt,
-        cadenceDays: person ? cadenceFor(person, cadenceDefaults) : 45,
-        interactionsLast90: Number(recent[0]?.n ?? 0),
-      }),
-    }).where(eq(people.id, personId));
-
-    if (place) {
-      await db().insert(personPlaces)
-        .values({ userId, personId, placeId: place.id, weight: 1, lastSeenAt: capture.capturedAt })
-        .onConflictDoUpdate({
-          target: [personPlaces.personId, personPlaces.placeId],
-          set: { weight: sql`${personPlaces.weight} + 1`, lastSeenAt: capture.capturedAt },
-        });
-    }
-  }
-
-  const status = lowConfidence ? "needs_review" : "filed";
   await db().update(captures).set({
-    status,
     extraction: result,
     placeId: place?.id ?? null,
+    filing: carried ? { ...carried, decisions: null } : null,
+    status: reason ? "needs_review" : "extracting",
     error: null,
   }).where(eq(captures.id, captureId));
-  console.log(`[capture ${captureId}] ${status}: ${result.people.length} people, ${factRows.length} facts, ${interactionRows.length} interactions, ${result.threads.length} threads, ${unresolved.length} loose`);
-}
 
-/** The model returns ISO strings; a malformed one must not take the whole note down. */
-function safeDate(iso: string, fallback: Date): Date;
-function safeDate(iso: string, fallback: null): Date | null;
-function safeDate(iso: string, fallback: Date | null): Date | null {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? fallback : d;
+  if (reason) {
+    console.log(`[capture ${captureId}] needs_review (${reason}): ${result.people.length} people, ${result.facts.length} facts, ${result.threads.length} threads, ${result.unresolved.length} loose. Nothing filed yet.`);
+    return;
+  }
+
+  const { counts } = await fileCapture({ userId, captureId, by: "auto", embed: models.embed });
+  console.log(`[capture ${captureId}] filed: ${counts.people} people, ${counts.facts} facts, ${counts.interactions} interactions, ${counts.threads} threads, ${counts.loose} loose`);
 }
 
 /** "Sunday, September 6, 2026 at 4:35 PM CDT (2026-09-06T21:35:16.196Z)" */
@@ -321,101 +262,6 @@ function upcomingDays(d: Date, timeZone: string, n: number): string {
     out.push(i === 0 ? `${label} (today)` : i === 1 ? `${label} (tomorrow)` : label);
   }
   return out.join(", ");
-}
-
-/**
- * The user typed where this happened. Match it to a place they already have,
- * case-insensitively and then by trigram similarity so "Brook Hollow" finds
- * "Brook Hollow Golf Club", or create it. If they typed a name while standing
- * there (coordinates present) and the place had none, learn them: from then
- * on plain "Here" matches it by proximity.
- */
-async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null) {
-  const name = hint.trim().replace(/\s+/g, " ");
-  if (!name) return null;
-
-  const exact = sql`lower(${places.name}) = lower(${name})`;
-  const similar = sql`similarity(${places.name}, ${name})`;
-  const [hit] = await db().select({ place: places })
-    .from(places)
-    .where(and(eq(places.userId, userId), sql`(${exact} or ${similar} > 0.45)`))
-    .orderBy(sql`${exact} desc`, sql`${similar} desc`)
-    .limit(1);
-
-  if (hit) {
-    const learn = lat != null && lng != null && hit.place.lat == null;
-    await db().update(places).set({
-      visitCount: sql`${places.visitCount} + 1`,
-      lastVisitedAt: new Date(),
-      ...(learn ? { lat, lng } : {}),
-    }).where(eq(places.id, hit.place.id));
-    return learn ? { ...hit.place, lat, lng } : hit.place;
-  }
-
-  const [row] = await db().insert(places).values({
-    userId, name, kind: "other", lat, lng, visitCount: 1, lastVisitedAt: new Date(),
-  }).returning();
-  return row;
-}
-
-/**
- * Matches coordinates to a place you already know before asking Google. Most
- * captures happen at the handful of places you actually go, so this keeps the
- * Places bill near zero.
- */
-async function resolvePlace(userId: string, lat: number, lng: number, env: Env) {
-  const b = bbox(lat, lng, 400);
-  const known = await db().select().from(places).where(and(
-    eq(places.userId, userId),
-    gte(places.lat, b.minLat), lte(places.lat, b.maxLat),
-    gte(places.lng, b.minLng), lte(places.lng, b.maxLng),
-  ));
-
-  const hit = known
-    .filter((p) => p.lat != null && p.lng != null)
-    .map((p) => ({ p, d: haversineM({ lat, lng }, { lat: p.lat!, lng: p.lng! }) }))
-    .filter((x) => x.d <= x.p.radiusM)
-    .sort((a, c) => a.d - c.d)[0];
-
-  if (hit) {
-    await db().update(places)
-      .set({ visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() })
-      .where(eq(places.id, hit.p.id));
-    return hit.p;
-  }
-
-  if (!env.GOOGLE_PLACES_KEY) return null;
-  const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": env.GOOGLE_PLACES_KEY,
-      "X-Goog-FieldMask": "places.id,places.displayName,places.location",
-    },
-    body: JSON.stringify({
-      maxResultCount: 1,
-      locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 90 } },
-    }),
-  });
-  if (!res.ok) return null;
-  const json = (await res.json()) as any;
-  const g = json.places?.[0];
-  if (!g) return null;
-
-  const [row] = await db().insert(places).values({
-    userId,
-    name: g.displayName?.text ?? "Unnamed place",
-    googlePlaceId: g.id,
-    lat: g.location?.latitude ?? lat,
-    lng: g.location?.longitude ?? lng,
-    visitCount: 1,
-    lastVisitedAt: new Date(),
-  }).onConflictDoUpdate({
-    target: [places.userId, places.googlePlaceId],
-    set: { visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() },
-  }).returning();
-
-  return row;
 }
 
 export interface Env {

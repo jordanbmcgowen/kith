@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { store, type CaptureSummary, type CaptureStatus } from "@/lib/store";
 
 /** Statuses that are still moving. While any row is in one, the list polls. */
@@ -17,8 +18,8 @@ const LABEL: Record<CaptureStatus, string> = {
 
 /**
  * The pipeline, visible. Each note shows where it is: uploaded, transcribing,
- * extracting, then filed or needs review. This is a status list, not the
- * confirmation screen; that comes next and renders the extraction itself.
+ * extracting, then filed or needs review. Tapping a row opens the note: the
+ * confirmation screen renders the extraction and files or fixes it.
  */
 export function RecentCaptures({ refreshKey }: { refreshKey: number }) {
   const [rows, setRows] = useState<CaptureSummary[] | null>(null);
@@ -33,6 +34,8 @@ export function RecentCaptures({ refreshKey }: { refreshKey: number }) {
         if (!alive) return;
         setRows(next);
         setError(null);
+        // The review count in the status bar listens for this.
+        window.dispatchEvent(new Event("kith:captures"));
         if (next.some((c) => ACTIVE.has(c.status))) timer = window.setTimeout(load, POLL_MS);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -64,7 +67,7 @@ function CaptureRow({ c, index }: { c: CaptureSummary; index: number }) {
   const x = c.extraction;
 
   return (
-    <div className="row anim" style={{ "--i": Math.min(index, 8) + 1 } as React.CSSProperties}>
+    <Link href={`/notes/${c.id}`} className="row anim" style={{ "--i": Math.min(index, 8) + 1 } as React.CSSProperties}>
       <span className="sq" style={{ "--c": active ? "var(--gold)" : "var(--text-3)", marginTop: 7 } as React.CSSProperties} />
       <span className="body">
         <span className="recall">
@@ -79,7 +82,7 @@ function CaptureRow({ c, index }: { c: CaptureSummary; index: number }) {
         </span>
         {c.status === "failed" && c.error && <span className="role">{clip(c.error, 200)}</span>}
       </span>
-    </div>
+    </Link>
   );
 }
 

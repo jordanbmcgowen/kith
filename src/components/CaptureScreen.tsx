@@ -80,6 +80,18 @@ export function CaptureScreen() {
     toastTimer.current = window.setTimeout(() => setToast(null), 2800);
   };
 
+  /* ---- a message left by the confirmation screen on its way here ---- */
+  useEffect(() => {
+    try {
+      const left = sessionStorage.getItem("kith:toast");
+      if (left) {
+        sessionStorage.removeItem("kith:toast");
+        showToast(left);
+      }
+    } catch { /* private mode */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* ---- voice ---- */
   const start = async () => {
     setError(null);

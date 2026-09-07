@@ -287,3 +287,74 @@ button.row:active{background:var(--rule);}
 .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center;gap:12px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);}
 .foot form{display:inline;}
 .foot button{font:inherit;color:var(--text-2);letter-spacing:inherit;text-transform:inherit;}
+
+/* ───────────────────────────── confirmation ────────────────────────────── */
+.bar-r{display:flex;align-items:center;gap:14px;}
+.review{color:var(--gold);text-decoration:none;}
+.review:hover{text-decoration:underline;text-underline-offset:3px;}
+.back{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);text-decoration:none;margin-top:14px;}
+.back:hover{color:var(--text);}
+a.row{text-decoration:none;color:inherit;}
+a.row:hover{background:var(--raise);padding-left:6px;}
+a.row:active{background:var(--rule);}
+
+/* Small text actions: drop, undo, attach, someone else. Never buttons with fills. */
+.act{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2);
+  text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--rule-2);white-space:nowrap;
+}
+.act:hover{color:var(--text);}
+.act.gold{color:var(--gold);text-decoration-color:var(--gold);}
+.act:disabled,.link:disabled{opacity:.45;cursor:default;}
+
+/* One block per person: the row, its controls, then what the note says about them. */
+.pb{padding:16px 0 4px;border-bottom:1px solid var(--rule);transition:opacity .3s ease;}
+.pb:last-child{border-bottom:none;}
+.pb.out{opacity:.42;}
+.pb.out .nm{text-decoration:line-through;}
+.pb .row{padding:0;border-bottom:none;}
+.pb .row:hover{background:none;padding-left:0;}
+
+/* The five circles as text, the active one underlined in its own color. One tap each. */
+.circles{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;}
+.circles button{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);
+  padding:2px 0 7px;position:relative;transition:color .2s ease;
+}
+.circles button::after{
+  content:"";position:absolute;left:0;right:0;bottom:2px;height:2px;background:var(--c,var(--gold));
+  transform:scaleX(0);transform-origin:left;transition:transform .28s cubic-bezier(.2,.9,.25,1);
+}
+.circles button[aria-pressed="true"]{color:var(--text);}
+.circles button[aria-pressed="true"]::after{transform:scaleX(1);}
+
+/* Facts, interactions and follow-ups under their person, aligned with the name. */
+.items{margin:6px 0 0 54px;}
+.item{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--rule);font-size:13px;line-height:1.5;transition:opacity .3s ease;}
+.item .ik{flex:0 0 70px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);padding-top:3px;}
+.item .it{flex:1;min-width:0;}
+.item .act,.item .meta{padding-top:3px;}
+.item.off{opacity:.42;}
+.item.off .it{text-decoration:line-through;}
+@media (max-width:400px){.items{margin-left:0;}}
+
+.loose .tmeta{gap:14px;}
+.loose.off q{opacity:.42;text-decoration:line-through;}
+
+/* The inline person picker. A field and a short ruled list, never a modal. */
+.picker{margin-top:10px;border-top:1px solid var(--rule-2);}
+.picker .field{padding:10px 0;}
+.picker .list{max-height:330px;overflow-y:auto;}
+.picker .row{padding:10px 0;gap:11px;border-bottom:1px solid var(--rule);}
+.picker .row:hover{background:var(--raise);padding-left:6px;}
+.picker .mark{width:30px;height:30px;font-size:11px;}
+
+/* Tags: the user's own groups, as text with a hairline. Tap the mark to remove. */
+.tags{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin-top:2px;min-height:18px;}
+.tg{
+  display:inline-flex;align-items:center;gap:6px;
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2);
+  border-bottom:1px solid var(--rule-2);padding-bottom:2px;
+}
+.tg button{color:var(--text-3);font-size:13px;line-height:1;padding:0 1px;}
+.tg button:hover{color:var(--text);}

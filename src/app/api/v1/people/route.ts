@@ -11,6 +11,7 @@ const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
 const newPerson = z.object({
   displayName: z.string().trim().min(1, "Name is required"),
   circle: z.enum(CIRCLES).default("other"),
+  tags: z.array(z.string().trim().min(1).max(40)).max(8).default([]),
   role: z.string().trim().nullish(),
   pronunciation: z.string().trim().nullish(),
   goesBy: z.string().trim().nullish(),
@@ -39,6 +40,7 @@ export const POST = route(async (req: Request) => {
     userId,
     displayName: body.displayName,
     circle: body.circle,
+    tags: body.tags,
     role: body.role ?? null,
     pronunciation: body.pronunciation ?? null,
     goesBy: body.goesBy ?? null,

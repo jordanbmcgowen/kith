@@ -19,6 +19,7 @@ export const ExtractionSchema = z.object({
     isNew: z.boolean(),
     circle: z.enum(["family", "friends", "work", "neighbors", "other"]).optional(),
     role: z.string().optional(),
+    tags: z.array(z.string()).optional(),
   })),
   facts: z.array(z.object({
     personName: z.string(),
@@ -56,6 +57,7 @@ export type Candidate = {
   goesBy: string | null;
   circle: string;
   role: string | null;
+  tags: string[];
   nearHere: boolean;
   topFacts: string[];
 };
@@ -66,6 +68,10 @@ const SYSTEM = `You turn a person's spoken notes about their own life into struc
 
 Rules:
 - Only match a person to an id from CANDIDATES. Never invent an id. If the person is not in the list, set matchedPersonId to null and isNew to true.
+- A person entry is for someone the speaker dealt with directly in this note, or is describing on their own terms so they can be remembered later. Someone who only comes up while talking about somebody else, such as a spouse, a child, a sibling, a boss or a friend of theirs, is not a person entry. Keep them as a fact on the person they belong to, in the speaker's words ("Daughter Priya, got into Rice early decision"), kind "relation" for family and "context" otherwise. Make them their own entry only if the speaker actually talked with them or clearly wants to track them on their own.
+- A bare name on a list is still a person entry, even with nothing else said about them: the speaker wrote it down to remember them. Give every listed name its own entry, once each. Never move a listed name into unresolved.
+- tags name the group, team, organization or setting a person belongs to, in one or two words: "YoungLife", "Journeymen", "Brook Hollow", "Neighborly board". Use the note's own headings and phrasing. Reuse a tag from TAGS or from a candidate's tags when it means the same thing; do not invent a second spelling. Only tag what the note supports, at most three per person. A description ("tall bald guy") or a fact is not a tag.
+- confidence means two different things. For a matched person it is how sure you are that this is the candidate whose id you gave. For a new person it is how sure you are that this is a distinct person who is not already in CANDIDATES under another spelling, a nickname, a first name only, or a description. Knowing little about a new person is not a reason to lower it; a name close to a candidate's is.
 - Prefer candidates marked nearHere when a name is ambiguous, but say so in confidence rather than guessing high.
 - A fact is something durable and true about the person: family, preferences, history, situation. "He seemed tired" is not a fact. "His mother is ill" is.
 - Kind "sensitive" is for things to handle with care: health, grief, subjects to avoid. Mark them so, do not omit them.
@@ -84,6 +90,8 @@ export async function extract(input: {
   placeName: string | null;
   candidates: Candidate[];
   openThreads: OpenThread[];
+  /** The user's existing tags, most used first, so the model reuses spellings. */
+  tags?: string[];
   /** The next couple of weeks as "Sun Sep 6 (today), Mon Sep 7, ...", so weekdays are a lookup. */
   dateContext?: string;
   model?: string;
@@ -100,7 +108,9 @@ export async function extract(input: {
 
   const res = await anthropic.messages.create({
     model,
-    max_tokens: 8000,
+    // A pasted roster comes back as forty people and fifty facts. Room for
+    // that twice over, so a long note is never cut off mid-JSON.
+    max_tokens: 16000,
     system: SYSTEM,
     tools: [{
       name: "file_note",
@@ -115,6 +125,7 @@ export async function extract(input: {
         `TIMEZONE: ${input.timezone}`,
         ...(input.dateContext ? [`CALENDAR: ${input.dateContext}`] : []),
         `PLACE: ${input.placeName ?? "unknown"}`,
+        `TAGS: ${JSON.stringify(input.tags ?? [])}`,
         ``,
         `CANDIDATES:`,
         JSON.stringify(input.candidates, null, 1),
@@ -129,16 +140,21 @@ export async function extract(input: {
   });
 
   const block = res.content.find((c) => c.type === "tool_use");
-  if (!block || block.type !== "tool_use") throw new Error("Model returned no tool call");
+  if (!block || block.type !== "tool_use") throw new Error(`Model returned no tool call (stop_reason ${res.stop_reason})`);
 
-  const parsed = ExtractionSchema.safeParse(block.input);
+  const parsed = ExtractionSchema.safeParse(unstring(block.input));
   if (!parsed.success) {
+    // Say what came back, not just that it was wrong. The first line of the
+    // raw input is what tells the next person whether the model truncated,
+    // double encoded, or invented a shape.
+    const raw = JSON.stringify(block.input);
+    console.warn(`[extract] ${model} returned an invalid extraction (stop_reason ${res.stop_reason}, ${raw.length} chars): ${raw.slice(0, 400)}`);
     // One escalation to a stronger model before giving up. Cheap insurance:
     // a malformed extraction means the user's note goes to needs_review.
     if (model !== ESCALATE_MODEL) {
       return extract({ ...input, model: ESCALATE_MODEL });
     }
-    throw new Error(`Extraction failed validation: ${parsed.error.message}`);
+    throw new Error(`Extraction failed validation after escalation (stop_reason ${res.stop_reason}): ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. Raw: ${raw.slice(0, 300)}`);
   }
 
   // Guard rail 1: never trust an id the model made up.
@@ -156,8 +172,26 @@ export async function extract(input: {
   return parsed.data;
 }
 
-/** Confidence below this goes to needs_review instead of filing itself. */
-export const AUTO_FILE_THRESHOLD = 0.82;
+/**
+ * Models occasionally hand a tool an array as a JSON string ("people":
+ * "[{...}]") instead of as an array. Decode any top level string that
+ * parses as JSON before validating, so a good extraction with one wrapping
+ * mistake is not thrown away.
+ */
+function unstring(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!(t.startsWith("[") || t.startsWith("{"))) continue;
+    try { out[k] = JSON.parse(t); } catch { /* leave it; validation will say so */ }
+  }
+  return out;
+}
+
+/** Confidence below this goes to needs_review instead of filing itself. Lives in threshold.ts. */
+export { AUTO_FILE_THRESHOLD } from "./threshold";
 
 const TOOL_SCHEMA = {
   type: "object",
@@ -175,6 +209,7 @@ const TOOL_SCHEMA = {
           isNew: { type: "boolean" },
           circle: { type: "string", enum: ["family", "friends", "work", "neighbors", "other"] },
           role: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
         },
       },
     },

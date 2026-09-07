@@ -35,6 +35,7 @@ import { relations, sql } from "drizzle-orm";
 export const circleEnum = pgEnum("circle_kind", [
   "family", "friends", "work", "neighbors", "other",
 ]);
+export type Circle = (typeof circleEnum.enumValues)[number];
 
 export const captureKindEnum = pgEnum("capture_kind", [
   "voice", "text", "photo", "calendar",
@@ -142,6 +143,11 @@ export const people = pgTable("people", {
   pronouns: text("pronouns"),
 
   circle: circleEnum("circle").default("other").notNull(),
+  // The user's own words for the groups this person belongs to: "YoungLife",
+  // "Journeymen", "Brook Hollow". Proposed by extraction from the note's own
+  // headings and phrasing, confirmed on the screen, one spelling per tag.
+  // Circles are fixed and five; tags are open and theirs.
+  tags: text("tags").array().default(sql`'{}'::text[]`).notNull(),
   role: text("role"),                            // one-line "who they are to you"
   company: text("company"),
   title: text("title"),
@@ -165,6 +171,8 @@ export const people = pgTable("people", {
   // Trigram index for typo-tolerant name matching during extraction.
   // Requires: CREATE EXTENSION IF NOT EXISTS pg_trgm;
   index("people_name_trgm_idx").using("gin", sql`${t.displayName} gin_trgm_ops`),
+  // "everyone tagged Journeymen": a GIN index answers @> and = any() on the list.
+  index("people_tags_idx").using("gin", t.tags),
 ]);
 
 /** Where you usually run into someone. Drives location-based ranking. */
@@ -276,6 +284,10 @@ export const captures = pgTable("captures", {
   capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
   // Full model output, kept so a bad extraction can be re-run or audited.
   extraction: jsonb("extraction").$type<ExtractionResult>(),
+  // What filing did with it: the person rows it created, the people it
+  // touched, the decisions applied. Null until the note has filed once. This
+  // is what makes a second filing replace the first instead of doubling it.
+  filing: jsonb("filing").$type<CaptureFiling>(),
   error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
@@ -363,6 +375,8 @@ export type ExtractionResult = {
     isNew: boolean;
     circle?: "family" | "friends" | "work" | "neighbors" | "other";
     role?: string;
+    /** Groups the note places them in, in the user's words. At most a few. */
+    tags?: string[];
   }[];
   facts: {
     personName: string;
@@ -376,4 +390,43 @@ export type ExtractionResult = {
   closesThreadIds: string[];
   place: { name: string | null; confidence: number } | null;
   unresolved: string[];          // becomes loose_threads
+};
+
+/**
+ * The user's decisions about an extraction, one entry per item and in the
+ * same order as the extraction's arrays. Absent decisions mean "as proposed":
+ * match what the model matched, create what it called new, keep everything.
+ * Built by the confirmation screen, validated in src/lib/filing.ts.
+ */
+export type FilingDecisions = {
+  people: {
+    action: "match" | "new" | "drop";
+    /** The existing person for "match"; for "new", the row a previous filing created, if any. */
+    personId: string | null;
+    /** Set the person's circle. Absent leaves it alone. */
+    circle?: Circle;
+    /** The person's complete tag list after this note. Absent leaves it alone. */
+    tags?: string[];
+  }[];
+  facts: { keep: boolean }[];
+  interactions: { keep: boolean }[];
+  threads: { keep: boolean }[];
+  /** Attach to a person (it becomes a fact on them), dismiss, or leave open. */
+  unresolved: { personId: string | null; dismissed: boolean }[];
+  /** Keep a known place by id, resolve a typed name, or neither to clear it. */
+  place: { placeId: string | null; name: string | null };
+};
+
+/** What a filing did. Stored on the capture so the next filing can undo and redo it. */
+export type CaptureFiling = {
+  filedAt: string;
+  /** auto: cleared the threshold. user: confirmed on the screen. legacy: reconstructed for notes filed before this existed. */
+  by: "auto" | "user" | "legacy";
+  /** Person rows this capture created. Reused by name on a re-file, removed when unused and unreferenced. */
+  created: { name: string; personId: string }[];
+  /** Everyone this filing wrote to, so a re-file can recompute their warmth. */
+  peopleIds: string[];
+  placeId: string | null;
+  /** The decisions applied, parallel to `extraction`. Null after a re-extraction, which changes the arrays. */
+  decisions: FilingDecisions | null;
 };

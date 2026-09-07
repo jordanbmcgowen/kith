@@ -5,6 +5,12 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  // The fetch handler serves embeddings to the app over a service binding.
+  // No public hostname: with workers.dev and preview URLs off, the only way
+  // to reach it is from a Worker that declares the binding.
+  "workers_dev": false,
+  "preview_urls": false,
+
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "kith-audio" }],
   "queues": {
     "consumers": [{

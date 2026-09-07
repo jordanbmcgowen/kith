@@ -12,6 +12,9 @@
   "queues": {
     "producers": [{ "binding": "CAPTURE_QUEUE", "queue": "kith-captures" }]
   },
+  // The processor holds the model keys. The app reaches its embedding
+  // endpoint over this binding, so the OpenAI key lives in exactly one place.
+  "services": [{ "binding": "PROCESSOR", "service": "kith-processor" }],
 
   // Not secrets. AUTH_URL must match the deployed origin exactly or Auth.js
   // builds the wrong OAuth callback and Google rejects it. AUTH_TRUST_HOST is
@@ -25,6 +28,7 @@
 
   // Secrets are set with `wrangler secret put`, never committed:
   //   DATABASE_URL  AUTH_SECRET  AUTH_GOOGLE_ID  AUTH_GOOGLE_SECRET
-  //   ANTHROPIC_API_KEY  OPENAI_API_KEY  GOOGLE_PLACES_KEY
   //   VAPID_PUBLIC_KEY  VAPID_PRIVATE_KEY
+  // The model keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_PLACES_KEY) are
+  // secrets on kith-processor only. See wrangler.worker.jsonc.
 }
