@@ -19,7 +19,7 @@
 import { db, users, captures, people, threads, places, personPlaces } from "../db";
 import { transcribe } from "../lib/ai/transcribe";
 import { extract, type Candidate } from "../lib/ai/extract";
-import { embed } from "../lib/ai/embed";
+import { embed, EMBED_MAX_TEXTS } from "../lib/ai/embed";
 import { audioExtension } from "../lib/audio";
 import { resolvePlace, resolvePlaceByName } from "../lib/places";
 import { fileCapture, reconstructFiling, reviewReason } from "../lib/filing";
@@ -52,6 +52,23 @@ const isPermanent = (err: unknown) => {
 };
 
 export default {
+  /**
+   * Reached only over the app's PROCESSOR service binding: this Worker has no
+   * public hostname (workers_dev and preview_urls are off in its config).
+   * POST /embed with { texts } returns { vectors }, so the confirmation
+   * screen can file with embeddings while the OpenAI key stays here.
+   */
+  async fetch(req: Request) {
+    const url = new URL(req.url);
+    if (req.method !== "POST" || url.pathname !== "/embed") return new Response("Not found", { status: 404 });
+    const body = (await req.json().catch(() => null)) as { texts?: unknown } | null;
+    const texts = body?.texts;
+    if (!Array.isArray(texts) || texts.length > EMBED_MAX_TEXTS || !texts.every((t) => typeof t === "string")) {
+      return new Response("Expected { texts: string[] }", { status: 400 });
+    }
+    return Response.json({ vectors: await embed(texts) });
+  },
+
   async queue(batch: MessageBatch<Msg>, env: Env) {
     for (const msg of batch.messages) {
       const { captureId } = msg.body;

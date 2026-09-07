@@ -88,10 +88,11 @@ wrangler secret put DATABASE_URL      # the POOLED string
 wrangler secret put AUTH_SECRET
 wrangler secret put AUTH_GOOGLE_ID
 wrangler secret put AUTH_GOOGLE_SECRET
-wrangler secret put OPENAI_API_KEY    # the app embeds what the confirmation screen files
 ```
 
-And on the processor, which runs the models:
+And on the processor, which is the only Worker that holds model keys. The app
+reaches its embedding endpoint over a service binding (see `wrangler.jsonc`),
+so the OpenAI key is set exactly once:
 
 ```bash
 wrangler secret put DATABASE_URL --config wrangler.worker.jsonc
@@ -139,9 +140,9 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    `/notes/<id>`. A note whose people all cleared the confidence line filed
    itself and shows what landed; anything less certain waited, and File it
    commits it. Every fix is a tap: someone else, leave out, a circle, drop a
-   fact, attach or dismiss a loose thread, clear the place. The app Worker
-   needs `OPENAI_API_KEY` too (`wrangler secret put OPENAI_API_KEY --config
-   wrangler.jsonc`), because filing embeds what it writes. "Read it again"
+   fact, attach or dismiss a loose thread, clear the place. Filing from the
+   app embeds what it writes by asking the processor over the `PROCESSOR`
+   service binding, so no model key lives on the app. "Read it again"
    re-runs extraction on a note and stops at needs review.
 4. **Person detail.** Read path only. Facts, timeline, threads.
 5. **Search.** `/api/v1/search` is already written and works once you have

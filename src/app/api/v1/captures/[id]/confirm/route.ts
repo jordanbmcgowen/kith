@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { route, isUuid } from "@/lib/api";
 import { db, captures } from "@/db";
-import { embed } from "@/lib/ai/embed";
+import { embedVia } from "@/lib/ai/embed";
 import { DecisionsSchema, FilingError, fileCapture } from "@/lib/filing";
 import { and, eq } from "drizzle-orm";
 
@@ -39,6 +40,11 @@ export const POST = route(async (req: Request, ctx: Ctx) => {
   if (!capture.extraction || (capture.status !== "needs_review" && capture.status !== "filed")) {
     return NextResponse.json({ error: "Still working on this note. Give it a moment." }, { status: 409 });
   }
+
+  // Embeddings come from the processor over its service binding; the app
+  // holds no model keys.
+  const { env } = getCloudflareContext();
+  const embed = (texts: string[]) => embedVia(env.PROCESSOR, texts);
 
   try {
     const { counts, filing } = await fileCapture({ userId, captureId: id, decisions: parsed.data, by: "user", embed });

@@ -93,7 +93,10 @@ Built, step 3 of the build order (the confirmation screen):
   add `NEW_PEOPLE_REVIEW_AT` (3) people at once stops at `needs_review` with
   the extraction stored and nothing written. A queue message with
   `review: true` always stops there; that is what a re-run does.
-- `GET /api/v1/captures/:id`, `POST .../confirm`, `POST .../rerun`.
+- `GET /api/v1/captures/:id`, `POST .../confirm`, `POST .../rerun`. The
+  confirm route embeds through the `PROCESSOR` service binding: the
+  processor's fetch handler answers `POST /embed` with its own OpenAI key,
+  and has no public hostname. Model keys live on the processor only.
 - `src/components/ConfirmScreen.tsx` at `/notes/[id]`: the prototype's
   "Here's what I got", one block per person with the circle as one tap, the
   facts under each person with drop and undo, loose threads with attach and
