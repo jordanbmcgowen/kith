@@ -103,7 +103,9 @@ export async function extract(input: {
 
   const res = await anthropic.messages.create({
     model,
-    max_tokens: 8000,
+    // A pasted roster comes back as forty people and fifty facts. Room for
+    // that twice over, so a long note is never cut off mid-JSON.
+    max_tokens: 16000,
     system: SYSTEM,
     tools: [{
       name: "file_note",
@@ -132,16 +134,21 @@ export async function extract(input: {
   });
 
   const block = res.content.find((c) => c.type === "tool_use");
-  if (!block || block.type !== "tool_use") throw new Error("Model returned no tool call");
+  if (!block || block.type !== "tool_use") throw new Error(`Model returned no tool call (stop_reason ${res.stop_reason})`);
 
-  const parsed = ExtractionSchema.safeParse(block.input);
+  const parsed = ExtractionSchema.safeParse(unstring(block.input));
   if (!parsed.success) {
+    // Say what came back, not just that it was wrong. The first line of the
+    // raw input is what tells the next person whether the model truncated,
+    // double encoded, or invented a shape.
+    const raw = JSON.stringify(block.input);
+    console.warn(`[extract] ${model} returned an invalid extraction (stop_reason ${res.stop_reason}, ${raw.length} chars): ${raw.slice(0, 400)}`);
     // One escalation to a stronger model before giving up. Cheap insurance:
     // a malformed extraction means the user's note goes to needs_review.
     if (model !== ESCALATE_MODEL) {
       return extract({ ...input, model: ESCALATE_MODEL });
     }
-    throw new Error(`Extraction failed validation: ${parsed.error.message}`);
+    throw new Error(`Extraction failed validation after escalation (stop_reason ${res.stop_reason}): ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}. Raw: ${raw.slice(0, 300)}`);
   }
 
   // Guard rail 1: never trust an id the model made up.
@@ -157,6 +164,24 @@ export async function extract(input: {
   parsed.data.closesThreadIds = parsed.data.closesThreadIds.filter((id) => knownThreads.has(id));
 
   return parsed.data;
+}
+
+/**
+ * Models occasionally hand a tool an array as a JSON string ("people":
+ * "[{...}]") instead of as an array. Decode any top level string that
+ * parses as JSON before validating, so a good extraction with one wrapping
+ * mistake is not thrown away.
+ */
+function unstring(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const out: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!(t.startsWith("[") || t.startsWith("{"))) continue;
+    try { out[k] = JSON.parse(t); } catch { /* leave it; validation will say so */ }
+  }
+  return out;
 }
 
 /** Confidence below this goes to needs_review instead of filing itself. Lives in threshold.ts. */
