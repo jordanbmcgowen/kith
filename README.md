@@ -33,6 +33,8 @@ src/
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
+  live-check.mjs          drives the deployed app in a headless browser, cleans up after itself
+  migrate-http.mjs        applies migrations over Neon HTTPS where raw Postgres is blocked
 prototype/
   index.html              the interactive design reference. open it in a browser.
 ```

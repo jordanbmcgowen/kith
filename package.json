@@ -10,6 +10,8 @@
     "deploy:worker": "wrangler deploy --config wrangler.worker.jsonc",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:http": "node --env-file-if-exists=.env scripts/migrate-http.mjs",
+    "live:check": "node --env-file-if-exists=.env scripts/live-check.mjs",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
     "pipeline:check": "esbuild scripts/pipeline-check.ts --bundle --platform=node --format=esm --outfile=.wrangler/tmp/pipeline-check.mjs --log-level=warning && node --env-file-if-exists=.env .wrangler/tmp/pipeline-check.mjs"
@@ -32,6 +34,7 @@
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "drizzle-kit": "^0.31.4",
+    "playwright-core": "1.56",
     "typescript": "^5.9.0",
     "wrangler": "^4.33.0"
   }

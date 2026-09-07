@@ -117,9 +117,14 @@ Built, step 3 of the build order (the confirmation screen):
   starts from what they already carry plus what the note proposes, and
   shows it under each person with one tap to remove and "+ tag" to add.
 
+Step 3 is merged and deployed. Jordan has reviewed his real notes on it.
+
 Not built yet:
 
-- Person detail, search, the tab bar.
+- Person detail, search, the tab bar. Step 4 is next: the people list with
+  circle and tag filters, the person page (read only), one route
+  `GET /api/v1/people/:id`, the tab bar with People and Record, and person
+  rows on the confirmation screen linking to the person page.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
@@ -178,6 +183,44 @@ gets added. If he stops using it, no feature saves it.
   verified, and verification is a form plus a demo video. Gmail is
   **restricted** and triggers an annual security assessment. Do not add Gmail
   scopes.
+
+## Working from a Claude Code session
+
+What the remote session can and cannot do, learned the slow way. Jordan does
+not use a terminal; everything below runs from the session, and he says yes
+or no.
+
+- `CLOUDFLARE_API_TOKEN`, `DATABASE_URL` (pooled) and `DIRECT_URL` are set.
+  `npm run deploy`, `npm run deploy:worker`, `wrangler tail`, and
+  `wrangler secret list` all work from here. Secret values never appear
+  anywhere; only Jordan holds them.
+- Raw Postgres (port 5432) is blocked: `psql` and `npm run db:migrate` hang.
+  Neon's HTTPS driver is fine. Migrate with `npm run db:migrate:http`
+  (dry run) then `npm run db:migrate:http -- --apply`; it writes the same
+  journal drizzle-kit does. Query ad hoc with a few lines of
+  `@neondatabase/serverless` in a scratch file, never by printing the URL.
+- Outbound HTTPS goes through a proxy. Node scripts need
+  `NODE_USE_ENV_PROXY=1` in front of them (the pipeline check included).
+  Chromium's own TLS gets reset by that proxy until this policy file exists:
+  `/etc/chromium/policies/managed/kith.json` containing
+  `{"PostQuantumKeyAgreementEnabled": false, "EncryptedClientHelloEnabled": false}`.
+  Playwright's browser is preinstalled at `/opt/pw-browsers/chromium`; use
+  `playwright-core` with that path, never `playwright install`.
+- Test every step against the deployment before saying it works:
+  `NODE_USE_ENV_PROXY=1 npm run live:check`. It signs in with a temporary
+  `sessions` row (the cookie is `__Secure-authjs.session-token` = the row's
+  token), makes one note, drives the screen, checks the database, and
+  deletes exactly what it made. Extend it for each new screen. Delete only
+  rows you created, by id or by the `PIPELINE CHECK` marker, never "since
+  the run started".
+- The model keys live only on kith-processor. The app reaches embeddings
+  through the `PROCESSOR` service binding. Do not copy keys to the app.
+- Re-running extraction on a real note is `POST /api/v1/captures/:id/rerun`
+  with a temporary session; it always stops at needs_review. Ask first.
+- Never `pkill -f` anything; it has matched the session's own shell. Kill by
+  PID or by port.
+- Stops that need a yes: a migration, a deploy, a re-run on real notes, any
+  change to the extraction prompt (show the wording first).
 
 ## Design direction
 
