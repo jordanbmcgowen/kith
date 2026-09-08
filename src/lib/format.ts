@@ -68,3 +68,26 @@ export function excerpt(text: string, max = 120): string {
   const s = text.replace(/\s+/g, " ").trim();
   return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
 }
+
+/**
+ * An ISO timestamp as the yyyy-mm-dd a date input wants, read in the phone's
+ * own zone so a late-evening note does not show tomorrow's date.
+ */
+export function toDateInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * A date input's yyyy-mm-dd back to a timestamp. Local midday, not midnight,
+ * so it lands on the same calendar day whatever the zone.
+ */
+export function fromDateInput(v: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}

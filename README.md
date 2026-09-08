@@ -33,7 +33,7 @@ src/
   app/people/             the people list, by circle and tag (step 4)
   app/people/[id]/        the person page, read only (step 4)
   app/find/               search, names and memories together (step 5)
-  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TabBar, Shell
+  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TagAdder, TabBar, Shell
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
@@ -93,6 +93,13 @@ npm run dev
   can be wrong about is infuriating.
 - **Raw captures are immutable.** Extraction is derived and re-runnable. A bad
   model day costs you a re-run, not a memory.
+- **The model is correctable, the note is not.** Every fact, visit, follow-up
+  and loose thread on the confirmation screen can be edited in place before it
+  files. The transcript never changes: facts are derived, so fixing one is a
+  re-file, and the corrected words are what get embedded.
+- **Employers are tags, not circles.** A circle holds one value and sets the
+  cadence; a tag list holds every company someone has worked at. "Everyone I
+  know at Neighborly" stays a question you can ask after they change jobs.
 - **Search says why it matched.** Trigram over names, tags and roles for when
   you remember the word; cosine over facts and visits for when you only
   remember the shape of the thing. Every result carries the line that explains

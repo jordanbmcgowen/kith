@@ -9,7 +9,9 @@ import {
 import { CIRCLES, circleColor, initials } from "@/lib/circles";
 import { defaultDecisions, mergeTags } from "@/lib/decisions";
 import { AUTO_FILE_THRESHOLD } from "@/lib/ai/threshold";
+import { toDateInput, fromDateInput } from "@/lib/format";
 import { BackLink as Back } from "./BackLink";
+import { TagAdder } from "./TagAdder";
 
 type Status = CaptureView["capture"]["status"];
 type PersonDecision = FilingDecisions["people"][number];
@@ -95,7 +97,10 @@ export function ConfirmScreen({ id }: { id: string }) {
   const setPerson = (i: number, patch: Partial<PersonDecision>) =>
     update((d) => ({ ...d, people: d.people.map((p, k) => (k === i ? { ...p, ...patch } : p)) }));
   const toggle = (key: "facts" | "interactions" | "threads", i: number) =>
-    update((d) => ({ ...d, [key]: d[key].map((it, k) => (k === i ? { keep: !it.keep } : it)) }));
+    // Spread, so dropping and undoing does not throw away a correction.
+    update((d) => ({ ...d, [key]: d[key].map((it, k) => (k === i ? { ...it, keep: !it.keep } : it)) }));
+  const editItem = (key: "facts" | "interactions" | "threads", i: number, patch: Record<string, unknown>) =>
+    update((d) => ({ ...d, [key]: d[key].map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
   const setLoose = (i: number, patch: Partial<FilingDecisions["unresolved"][number]>) =>
     update((d) => ({ ...d, unresolved: d.unresolved.map((u, k) => (k === i ? { ...u, ...patch } : u)) }));
   const setPlace = (place: FilingDecisions["place"]) => update((d) => ({ ...d, place }));
@@ -227,6 +232,7 @@ export function ConfirmScreen({ id }: { id: string }) {
                   picker={picker?.kind === "person" && picker.index === i}
                   onPicker={(open) => setPicker(open ? { kind: "person", index: i } : null)}
                   onPerson={(patch) => setPerson(i, patch)}
+                  onEdit={editItem}
                   onLeaveOut={() => leaveOut(i)}
                   onBringBack={() => bringBack(i, p)}
                   onToggle={toggle}
@@ -289,7 +295,7 @@ export function ConfirmScreen({ id }: { id: string }) {
 
 /* ───────────────────────────────── people ───────────────────────────────── */
 
-function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, tagPool, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, createdId }: {
+function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, tagPool, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, onEdit, createdId }: {
   index: number;
   p: ExtractionResult["people"][number];
   i: number;
@@ -308,6 +314,7 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   onLeaveOut: () => void;
   onBringBack: () => void;
   onToggle: (key: "facts" | "interactions" | "threads", i: number) => void;
+  onEdit: (key: "facts" | "interactions" | "threads", i: number, patch: Record<string, unknown>) => void;
   createdId: string | null;
 }) {
   const row = dec.personId ? rosterById.get(dec.personId) : undefined;
@@ -402,15 +409,48 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
 
       {(facts.length > 0 || interactions.length > 0 || threads.length > 0) && (
         <div className="items">
-          {facts.map(([f, k]) => (
-            <ItemRow key={`f${k}`} k={f.kind} text={f.content} keep={decisions.facts[k].keep} muted={out} onToggle={() => onToggle("facts", k)} />
-          ))}
-          {interactions.map(([it, k]) => (
-            <ItemRow key={`i${k}`} k={fmtDay(it.occurredAt) ?? "Met"} text={it.summary} keep={decisions.interactions[k].keep} muted={out} onToggle={() => onToggle("interactions", k)} />
-          ))}
-          {threads.map(([t, k]) => (
-            <ItemRow key={`t${k}`} k={t.dueAt && fmtDay(t.dueAt) ? `Due ${fmtDay(t.dueAt)}` : "Follow-up"} text={t.title} keep={decisions.threads[k].keep} muted={out} onToggle={() => onToggle("threads", k)} />
-          ))}
+          {facts.map(([f, k]) => {
+            const d = decisions.facts[k];
+            return (
+              <ItemRow
+                key={`f${k}`} k={f.kind} text={d.text ?? f.content} edited={!!d.text}
+                keep={d.keep} muted={out}
+                onToggle={() => onToggle("facts", k)}
+                onSave={(e) => onEdit("facts", k, { text: e.text === f.content ? undefined : e.text })}
+              />
+            );
+          })}
+          {interactions.map(([it, k]) => {
+            const d = decisions.interactions[k];
+            const when = d.at ?? it.occurredAt;
+            return (
+              <ItemRow
+                key={`i${k}`} k={fmtDay(when) ?? "Met"} text={d.text ?? it.summary} edited={!!d.text || !!d.at}
+                date={when} dateLabel="Happened" keep={d.keep} muted={out}
+                onToggle={() => onToggle("interactions", k)}
+                onSave={(e) => onEdit("interactions", k, {
+                  text: e.text === it.summary ? undefined : e.text,
+                  at: e.date && e.date !== it.occurredAt ? e.date : undefined,
+                })}
+              />
+            );
+          })}
+          {threads.map(([t, k]) => {
+            const d = decisions.threads[k];
+            const due = d.dueAt === undefined ? t.dueAt : d.dueAt;
+            return (
+              <ItemRow
+                key={`t${k}`} k={due && fmtDay(due) ? `Due ${fmtDay(due)}` : "Follow-up"} text={d.text ?? t.title}
+                edited={!!d.text || d.dueAt !== undefined}
+                date={due} dateLabel="Due" clearable keep={d.keep} muted={out}
+                onToggle={() => onToggle("threads", k)}
+                onSave={(e) => onEdit("threads", k, {
+                  text: e.text === t.title ? undefined : e.text,
+                  dueAt: (e.date ?? null) === (t.dueAt ?? null) ? undefined : e.date ?? null,
+                })}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -430,49 +470,84 @@ function statusOf(p: ExtractionResult["people"][number], dec: PersonDecision): {
   return { text: "New", live: true };
 }
 
-function ItemRow({ k, text: t, keep, muted, onToggle }: { k: string; text: string; keep: boolean; muted: boolean; onToggle: () => void }) {
+/**
+ * One thing the note says, and the ability to fix it. Tap the words, change
+ * them, Done. The model is nearly right often enough that dropping a whole
+ * fact to correct one word was the wrong and only choice.
+ *
+ * Nothing here rewrites the note. Facts, visits and follow-ups are derived
+ * from it, so a correction is a re-file; the transcript stands as it was said.
+ */
+function ItemRow({ k, text: t, edited, date, dateLabel, clearable, keep, muted, onToggle, onSave }: {
+  k: string;
+  text: string;
+  edited: boolean;
+  /** ISO, for the rows that carry a date. Absent on the rows that do not. */
+  date?: string | null;
+  dateLabel?: string;
+  /** Whether the date may be removed altogether. A visit always happened; a follow-up need not be due. */
+  clearable?: boolean;
+  keep: boolean;
+  muted: boolean;
+  onToggle: () => void;
+  onSave: (e: { text: string; date?: string | null }) => void;
+}) {
+  const hasDate = date !== undefined;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [day, setDay] = useState("");
+  const editing = draft !== null;
+
+  const start = () => { setDraft(t); setDay(toDateInput(date)); };
+  const cancel = () => setDraft(null);
+  const commit = () => {
+    const next = (draft ?? "").trim();
+    if (next) onSave({ text: next, ...(hasDate ? { date: day ? fromDateInput(day) : null } : {}) });
+    setDraft(null);
+  };
+
+  if (editing) {
+    return (
+      <div className="item">
+        <span className="ik">{k}</span>
+        <span className="it">
+          <textarea
+            className="ie" value={draft ?? "" } autoFocus rows={Math.min(6, Math.ceil((draft ?? "").length / 46) + 1)}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") cancel();
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+            }}
+          />
+          {hasDate && (
+            <label className="ie-when">
+              {dateLabel}
+              <input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+              {clearable && day && <button type="button" className="act" onClick={() => setDay("")}>No date</button>}
+            </label>
+          )}
+        </span>
+        <span className="acts">
+          <button className="act gold" onClick={commit} disabled={!(draft ?? "").trim()}>Done</button>
+          <button className="act" onClick={cancel}>Cancel</button>
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div className={`item${keep ? "" : " off"}`}>
       <span className="ik">{k}</span>
-      <span className="it">{t}</span>
+      <span className="it">
+        {muted || !keep
+          ? <span>{t}</span>
+          : <button type="button" className="it-tap" onClick={start} aria-label="Change this">{t}</button>}
+        {edited && <span className="edited">Edited</span>}
+      </span>
       {!muted && <button className="act" onClick={onToggle}>{keep ? "Drop" : "Undo"}</button>}
     </div>
   );
 }
 
-/**
- * One field and the user's other tags as text to tap. Enter or a tap adds;
- * Escape or Cancel closes. Inline, like everything else on this screen.
- */
-function TagAdder({ pool, onAdd, onClose }: { pool: string[]; onAdd: (tag: string) => void; onClose: () => void }) {
-  const [q, setQ] = useState("");
-  const s = q.trim().toLowerCase();
-  const shown = (s ? pool.filter((t) => t.toLowerCase().includes(s)) : pool).slice(0, 8);
-  const submit = () => { const t = q.trim(); if (t) onAdd(t); };
-  return (
-    <div className="picker">
-      <label className="field">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Group, team, club"
-          autoFocus
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={40}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } if (e.key === "Escape") onClose(); }}
-        />
-        {q.trim() && <button className="act gold" type="button" onClick={submit}>Add</button>}
-        <button className="act" type="button" onClick={onClose}>Cancel</button>
-      </label>
-      {shown.length > 0 && (
-        <div className="meta" style={{ padding: "10px 0 6px", gap: 16 }}>
-          {shown.map((t) => <button key={t} type="button" className="act" onClick={() => onAdd(t)}>{t}</button>)}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ───────────────────────────── kept from before ────────────────────────── */
 
@@ -561,7 +636,7 @@ function LooseThreads({ x, decisions, index, rosterById, roster, notePeople: not
           const off = dec.dismissed;
           return (
             <div key={i} className={`loose${off ? " off" : ""}`}>
-              <q>{t}</q>
+              <LooseText text={dec.text ?? t} edited={!!dec.text} locked={off} onSave={(next) => onLoose(i, { text: next === t ? undefined : next })} />
               <div className="tmeta">
                 {off && <><span>Dismissed</span><button className="act" onClick={() => onLoose(i, { dismissed: false })}>Undo</button></>}
                 {!off && target && <><span className="live" style={{ color: "var(--gold)" }}>Attached to {target.displayName}</span><button className="act" onClick={() => onLoose(i, { personId: null })}>Detach</button></>}
@@ -593,6 +668,36 @@ function LooseThreads({ x, decisions, index, rosterById, roster, notePeople: not
         ))}
       </div>
     </section>
+  );
+}
+
+/** A loose thread's own words, correctable in place like everything else. */
+function LooseText({ text, edited, locked, onSave }: { text: string; edited: boolean; locked: boolean; onSave: (next: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => { const next = (draft ?? "").trim(); if (next) onSave(next); setDraft(null); };
+  if (draft === null) {
+    return (
+      <q>
+        {locked ? text : <button type="button" className="it-tap" onClick={() => setDraft(text)} aria-label="Change this">{text}</button>}
+        {edited && <span className="edited">Edited</span>}
+      </q>
+    );
+  }
+  return (
+    <div>
+      <textarea
+        className="ie" value={draft} autoFocus rows={Math.min(6, Math.ceil(draft.length / 46) + 1)}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setDraft(null);
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+        }}
+      />
+      <div className="tmeta">
+        <button className="act gold" onClick={commit} disabled={!draft.trim()}>Done</button>
+        <button className="act" onClick={() => setDraft(null)}>Cancel</button>
+      </div>
+    </div>
   );
 }
 

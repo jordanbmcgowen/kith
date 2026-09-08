@@ -409,11 +409,19 @@ export type FilingDecisions = {
     /** The person's complete tag list after this note. Absent leaves it alone. */
     tags?: string[];
   }[];
-  facts: { keep: boolean }[];
-  interactions: { keep: boolean }[];
-  threads: { keep: boolean }[];
+  /**
+   * `text` replaces what the model wrote; absent keeps it. The model gets
+   * things nearly right often enough that dropping a whole fact to fix one
+   * word was the wrong and only choice. The transcript is never touched:
+   * facts are derived, so correcting one is a re-file, not a rewrite.
+   */
+  facts: { keep: boolean; text?: string }[];
+  /** `at` corrects when it happened, which is what warmth and last seen read. */
+  interactions: { keep: boolean; text?: string; at?: string }[];
+  /** `dueAt` absent keeps the model's date; null clears it. */
+  threads: { keep: boolean; text?: string; dueAt?: string | null }[];
   /** Attach to a person (it becomes a fact on them), dismiss, or leave open. */
-  unresolved: { personId: string | null; dismissed: boolean }[];
+  unresolved: { personId: string | null; dismissed: boolean; text?: string }[];
   /** Keep a known place by id, resolve a typed name, or neither to clear it. */
   place: { placeId: string | null; name: string | null };
 };

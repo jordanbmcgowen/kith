@@ -210,6 +210,51 @@ try {
   const bravoFacts = blocks.nth(1).locator(".item");
   const droppedFact = (await bravoFacts.count()) ? await bravoFacts.nth(0).locator(".it").innerText() : null;
   if (droppedFact) await bravoFacts.nth(0).locator(".act").click();
+  // correct the first person's first fact in place. The model is nearly right
+  // often enough that dropping a whole fact to fix one word was the wrong and
+  // only choice; this proves the corrected words are what file.
+  const MARK = "Corrected on the screen.";
+  const alphaFacts = blocks.nth(0).locator(".item");
+  let editedFact = null;
+  if (await alphaFacts.count()) {
+    const was = (await alphaFacts.nth(0).locator(".it").innerText()).trim();
+    editedFact = `${was} ${MARK}`;
+    await alphaFacts.nth(0).locator(".it-tap").click();
+    await page.waitForSelector(".item .ie", { timeout: 10000 });
+    await alphaFacts.nth(0).locator(".ie").fill(editedFact);
+    await alphaFacts.nth(0).locator(".acts .act", { hasText: "Done" }).click();
+    await page.waitForTimeout(200);
+    check("the correction replaces the model's words on the screen", (await alphaFacts.nth(0).locator(".it").innerText()).includes(MARK));
+    check("and the row says it was edited", (await alphaFacts.nth(0).locator(".edited").count()) === 1);
+  }
+
+  // move a follow-up's due date. "By Friday" landing on Saturday used to cost
+  // you the whole thread; now it costs a tap.
+  const DUE_DAY = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+  let movedDue = false;
+  // Index into `.item` rather than into a filtered list: opening a row swaps
+  // its text for a textarea, so anything filtered on `.it-tap` shifts under you.
+  const itemRows = page.locator(".item");
+  for (let i = 0, n = await itemRows.count(); i < n; i++) {
+    const row = itemRows.nth(i);
+    if (!(await row.locator(".it-tap").count())) continue;
+    if (!/^(due|follow-up)/i.test((await row.locator(".ik").innerText()).trim())) continue;
+    await row.locator(".it-tap").click();
+    await page.waitForSelector(".item .ie", { timeout: 10000 });
+    const open = page.locator(".item").filter({ has: page.locator(".ie") });
+    if ((await page.locator(".ie-when").count()) && /due/i.test(await page.locator(".ie-when").innerText())) {
+      await page.locator(".ie-when input").fill(DUE_DAY);
+      await open.locator(".acts .act", { hasText: "Done" }).click();
+      await page.waitForTimeout(250);
+      movedDue = true;
+      check("moving a due date relabels the row", (await row.locator(".ik").innerText()).trim().toLowerCase().startsWith("due"));
+      break;
+    }
+    await open.locator(".acts .act", { hasText: "Cancel" }).click();
+    await page.waitForTimeout(150);
+  }
+  check("a follow-up offered its due date to be moved", movedDue || !x.threads.length, x.threads.length);
+
   // leave the third person out
   if (x.people.length > 2) await blocks.nth(2).locator(".act", { hasText: "Leave out" }).click();
   check("left out block fades", x.people.length > 2 ? await blocks.nth(2).evaluate((el) => el.classList.contains("out")) : true);
@@ -258,6 +303,11 @@ try {
   check("typed tag landed on both people, one spelling", tagged.every((p) => p.tags.some((t) => t === "Kith Test Board")), tagged);
   const f = await q("select content, person_id from facts where capture_id = $1", [captureId]);
   check("dropped fact stayed out", !droppedFact || !f.some((r) => r.content === droppedFact), f.map((r) => r.content));
+  check("the corrected fact is what filed, once", !editedFact || f.filter((r) => r.content.includes(MARK)).length === 1, f.map((r) => r.content));
+  if (movedDue) {
+    const [t] = await q("select to_char(due_at at time zone 'UTC', 'YYYY-MM-DD') d from threads where created_from_capture_id = $1 and due_at is not null limit 1", [captureId]);
+    check("the due date you set is the one stored", t?.d === DUE_DAY, [t?.d, DUE_DAY]);
+  }
   check("facts carry embeddings from the processor over the binding", Number((await q("select count(*) n from facts where capture_id = $1 and embedding is not null", [captureId]))[0].n) === f.length, f.length);
   const loose = await q("select content, dismissed_at from loose_threads where capture_id = $1", [captureId]);
   check("first loose thread dismissed", !x.unresolved.length || loose.some((l) => l.dismissed_at != null), loose);
@@ -462,12 +512,54 @@ try {
   await page.waitForTimeout(400);
   await page.screenshot({ path: `${OUT}/13-find-nothing.png`, fullPage: true });
   check("nothing found says so in the app's own words", /kith only knows what you have told it/i.test(await page.locator(".empty").innerText()));
+
+  /* L. editing who someone is */
+  const BRAND = "Kith Test Brand";
+  const patch = (body, id = who.id) => page.request.patch(`${BASE}/api/v1/people/${id}`, { data: body });
+  const readPerson = async () => (await (await page.request.get(`${BASE}/api/v1/people/${who.id}`)).json()).person;
+  const wasPerson = await readPerson();
+  const edit = await patch({ displayName: `${who.displayName} Jr`, circle: "family", role: "changed by the live check", tags: [...wasPerson.tags, BRAND] });
+  check("PATCH /api/v1/people/:id is 200", edit.status() === 200, edit.status());
+  const nowPerson = await readPerson();
+  check("name, circle, role and tags all moved",
+    nowPerson.displayName === `${who.displayName} Jr` && nowPerson.circle === "family"
+    && nowPerson.tags.includes(BRAND) && /live check/.test(nowPerson.role ?? ""),
+    { name: nowPerson.displayName, circle: nowPerson.circle, tags: nowPerson.tags, role: nowPerson.role });
+  check("the cadence follows the circle it was moved to", nowPerson.cadenceDays === 14, [wasPerson.circle, wasPerson.cadenceDays, nowPerson.circle, nowPerson.cadenceDays]);
+  // An employer is a tag, which is the whole reason tags and not circles.
+  check("a brand tag makes them findable by the brand", (await search(BRAND)).results.some((r) => r.person.id === who.id));
+  await patch({ role: "" });
+  check("an empty string clears a field", (await readPerson()).role === null);
+  check("an unknown field is refused", (await patch({ nope: 1 })).status() === 400);
+  check("an empty patch is refused", (await patch({})).status() === 400);
+  check("a nameless person is refused", (await patch({ displayName: "   " })).status() === 400);
+  check("a malformed id is a 404", (await patch({ circle: "work" }, "not-a-uuid")).status() === 404);
+  check("someone else's id is a 404", (await patch({ circle: "work" }, "00000000-0000-4000-8000-00000000dead")).status() === 404);
+  check("editing signed out is a 401",
+    (await (await browser.newContext()).request.patch(`${BASE}/api/v1/people/${who.id}`, { data: { circle: "work" } })).status() === 401);
+
+  // and the same thing with a thumb
+  await page.goto(`${BASE}/people/${who.id}`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".phead", { timeout: 20000 });
+  await page.locator(".phead .act", { hasText: "Edit" }).click();
+  await page.waitForSelector(".pedit", { timeout: 20000 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${OUT}/14-person-edit.png`, fullPage: true });
+  await page.locator(".pedit .field input").first().fill(`${who.displayName} Edited`);
+  await page.locator(".pedit .tabs button", { hasText: "Neighbors" }).click();
+  await page.locator(".pedit .act", { hasText: "Save" }).click();
+  await page.waitForSelector(".pname", { timeout: 20000 });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/15-person-edited.png`, fullPage: true });
+  check("the screen saved the name and the circle",
+    (await page.locator(".pname").innerText()).trim() === `${who.displayName} Edited`
+    && /neighbors/i.test(await page.locator(".phead .meta").innerText()));
 } catch (e) {
   failures++;
   console.log("  CRASH", e?.message ?? e);
   await page.screenshot({ path: `${OUT}/99-crash.png`, fullPage: true }).catch(() => {});
 } finally {
-  /* L. cleanup, by the ids this run made */
+  /* M. cleanup, by the ids this run made */
   if (placeId) {
     await q("delete from person_places where place_id = $1", [placeId]);
     await q("delete from places where id = $1 and user_id = $2", [placeId, user.id]);
@@ -485,7 +577,9 @@ try {
     if (createdIds.length) await q("delete from people where id = any($1::uuid[]) and user_id = $2", [createdIds, user.id]);
     const strays = await q("select id from people where display_name like 'Kith Test%' and user_id = $1", [user.id]);
     if (strays.length) await q("delete from people where display_name like 'Kith Test%' and user_id = $1", [user.id]);
-    await q("update people set tags = array_remove(tags, 'Kith Test Board'), updated_at = now() where user_id = $1 and 'Kith Test Board' = any(tags)", [user.id]);
+    for (const t of ["Kith Test Board", "Kith Test Brand"]) {
+      await q("update people set tags = array_remove(tags, $2), updated_at = now() where user_id = $1 and $2 = any(tags)", [user.id, t]);
+    }
     console.log(`cleanup: capture ${captureId} and ${createdIds.length + strays.length} people removed`);
   }
   await q("delete from sessions where session_token = $1", [token]);

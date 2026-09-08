@@ -44,10 +44,24 @@ export const DecisionsSchema = z.object({
     circle: z.enum(CIRCLES).optional(),
     tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
   })),
-  facts: z.array(z.object({ keep: z.boolean() })),
-  interactions: z.array(z.object({ keep: z.boolean() })),
-  threads: z.array(z.object({ keep: z.boolean() })),
-  unresolved: z.array(z.object({ personId: uuid.nullable(), dismissed: z.boolean() })),
+  // `text` and the dates are the user's corrections. Absent means the model's
+  // own words stand.
+  facts: z.array(z.object({ keep: z.boolean(), text: z.string().trim().min(1).max(2000).optional() })),
+  interactions: z.array(z.object({
+    keep: z.boolean(),
+    text: z.string().trim().min(1).max(2000).optional(),
+    at: z.string().trim().min(1).max(40).optional(),
+  })),
+  threads: z.array(z.object({
+    keep: z.boolean(),
+    text: z.string().trim().min(1).max(200).optional(),
+    dueAt: z.string().trim().min(1).max(40).nullable().optional(),
+  })),
+  unresolved: z.array(z.object({
+    personId: uuid.nullable(),
+    dismissed: z.boolean(),
+    text: z.string().trim().min(1).max(2000).optional(),
+  })),
   place: z.object({ placeId: uuid.nullable(), name: z.string().trim().max(120).nullable() }),
 });
 
@@ -273,11 +287,13 @@ export async function fileCapture(o: {
   const attached: string[] = [];
 
   x.facts.forEach((f, i) => {
-    if (!decisions.facts[i].keep) return;
-    const personId = resolve(f.personName, f.content);
+    const dec = decisions.facts[i];
+    if (!dec.keep) return;
+    const content = dec.text?.trim() || f.content;
+    const personId = resolve(f.personName, content);
     if (!personId) return;
     factRows.push({
-      userId, personId, kind: f.kind, content: f.content, confidence: f.confidence, captureId,
+      userId, personId, kind: f.kind, content, confidence: f.confidence, captureId,
       pinned: PINNED_KINDS.has(f.kind), embedding: null,
     });
   });
@@ -289,17 +305,19 @@ export async function fileCapture(o: {
     if (dec.dismissed || !dec.personId) return;
     if (!rosterById.has(dec.personId)) throw new FilingError(400, "That loose thread was attached to someone who is not in your people");
     attached.push(dec.personId);
-    factRows.push({ userId, personId: dec.personId, kind: "context", content: text, confidence: 1, captureId, pinned: false, embedding: null });
+    factRows.push({ userId, personId: dec.personId, kind: "context", content: dec.text?.trim() || text, confidence: 1, captureId, pinned: false, embedding: null });
   });
 
   const interactionRows: (typeof interactions.$inferInsert)[] = [];
   x.interactions.forEach((it, i) => {
-    if (!decisions.interactions[i].keep) return;
-    const personId = resolve(it.personName, it.summary);
+    const dec = decisions.interactions[i];
+    if (!dec.keep) return;
+    const summary = dec.text?.trim() || it.summary;
+    const personId = resolve(it.personName, summary);
     if (!personId) return;
     interactionRows.push({
       userId, personId, captureId, placeId: place?.id ?? null,
-      occurredAt: safeDate(it.occurredAt, capture.capturedAt), channel: it.channel, summary: it.summary,
+      occurredAt: safeDate(dec.at ?? it.occurredAt, capture.capturedAt), channel: it.channel, summary,
       // The place's coordinates when it has them, else the note's own.
       lat: place?.lat ?? capture.lat, lng: place?.lng ?? capture.lng, embedding: null,
     });
@@ -307,11 +325,15 @@ export async function fileCapture(o: {
 
   const threadRows: (typeof threads.$inferInsert)[] = [];
   x.threads.forEach((t, i) => {
-    if (!decisions.threads[i].keep) return;
-    const personId = resolve(t.personName, t.title);
+    const dec = decisions.threads[i];
+    if (!dec.keep) return;
+    const title = dec.text?.trim() || t.title;
+    const personId = resolve(t.personName, title);
     if (!personId) return;
+    // undefined leaves the model's date alone; null is the user clearing it.
+    const due = dec.dueAt === undefined ? t.dueAt : dec.dueAt;
     threadRows.push({
-      userId, personId, title: t.title, dueAt: t.dueAt ? safeDate(t.dueAt, null) : null, createdFromCaptureId: captureId,
+      userId, personId, title, dueAt: due ? safeDate(due, null) : null, createdFromCaptureId: captureId,
     });
   });
 
@@ -319,7 +341,7 @@ export async function fileCapture(o: {
     ...x.unresolved.map((text, i) => {
       const dec = decisions.unresolved[i];
       return {
-        userId, captureId, content: text,
+        userId, captureId, content: dec.text?.trim() || text,
         resolvedPersonId: dec.dismissed ? null : dec.personId,
         dismissedAt: dec.dismissed ? now : null,
       };

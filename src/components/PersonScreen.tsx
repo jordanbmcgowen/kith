@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { store, ApiError, type PersonView } from "@/lib/store";
-import { circleColor, circleLabel, initials } from "@/lib/circles";
+import { store, ApiError, type PersonView, type PersonPatch, type Circle } from "@/lib/store";
+import { CIRCLES, circleColor, circleLabel, initials } from "@/lib/circles";
+import { mergeTags } from "@/lib/decisions";
 import { daysSince, fmtChannel, fmtDay, fmtDue, excerpt } from "@/lib/format";
 import { BackLink } from "./BackLink";
 import { PEOPLE_VIEW_KEY } from "./PeopleScreen";
 import { sayOf } from "./PersonRow";
+import { TagAdder } from "./TagAdder";
 
 const style = (i: number, extra?: CSSProperties) => ({ "--i": Math.min(i, 14), ...extra }) as CSSProperties;
 const text = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -32,6 +34,17 @@ export function PersonScreen({ id }: { id: string }) {
   const [view, setView] = useState<PersonView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [back, setBack] = useState("/people");
+  const [editing, setEditing] = useState(false);
+  /** Every tag the user has, for the suggestions under "+ tag". Fetched only when editing. */
+  const [tagPool, setTagPool] = useState<string[]>([]);
+
+  const reload = () =>
+    store.person(id).then((next) => { setView(next); setError(null); });
+
+  const openEditor = () => {
+    setEditing(true);
+    store.people().then((l) => setTagPool(l.tags)).catch(() => { /* suggestions are a nicety */ });
+  };
 
   useEffect(() => {
     try {
@@ -64,18 +77,28 @@ export function PersonScreen({ id }: { id: string }) {
   return (
     <>
       {backLink}
-      <div className="phead anim" style={style(1)}>
-        <span className="mark lg" style={{ "--c": c } as CSSProperties}>{initials(p.displayName)}</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h1 className="pname">{p.displayName}</h1>
-          {say && <div className="say" style={{ marginTop: 7 }}>{say}</div>}
-          {role && <div className="role" style={{ marginTop: 7 }}>{role}</div>}
-          <div className="meta" style={{ marginTop: 10 }}>
-            <span className="circ"><span className="sq" style={{ "--c": c } as CSSProperties} />{circleLabel(p.circle)}</span>
-            {p.tags.map((t) => <span key={t} className="tg">{t}</span>)}
+      {editing ? (
+        <PersonEditor
+          person={p}
+          pool={tagPool}
+          onClose={() => setEditing(false)}
+          onSaved={async () => { setEditing(false); await reload(); }}
+        />
+      ) : (
+        <div className="phead anim" style={style(1)}>
+          <span className="mark lg" style={{ "--c": c } as CSSProperties}>{initials(p.displayName)}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h1 className="pname">{p.displayName}</h1>
+            {say && <div className="say" style={{ marginTop: 7 }}>{say}</div>}
+            {role && <div className="role" style={{ marginTop: 7 }}>{role}</div>}
+            <div className="meta" style={{ marginTop: 10 }}>
+              <span className="circ"><span className="sq" style={{ "--c": c } as CSSProperties} />{circleLabel(p.circle)}</span>
+              {p.tags.map((t) => <span key={t} className="tg">{t}</span>)}
+              <button className="act" onClick={openEditor}>Edit</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="stats anim" style={style(2)}>
         <div className="stat">
@@ -213,4 +236,107 @@ function Visit({ e, color, index }: { e: Entry; color: string; index: number }) 
   return e.noteId
     ? <Link href={`/notes/${e.noteId}`} className="ev anim" style={s}>{inner}</Link>
     : <div className="ev anim" style={s}>{inner}</div>;
+}
+
+/**
+ * Who someone is, editable in place. Their name, how you say it, what they
+ * are to you, their circle, and their tags.
+ *
+ * Tags are where employers live. Circles are fixed at five and set the
+ * cadence, so a company cannot be one: you would lose every previous employer
+ * the day someone changes jobs, which is the opposite of the point. A tag list
+ * holds Yum and Neighborly at once, and "everyone I know at Neighborly" stays
+ * a question you can ask.
+ *
+ * Facts, visits and threads are not editable here. Those are derived from
+ * notes, so the place to correct one is the note it came from, where the
+ * correction survives a re-file.
+ */
+function PersonEditor({ person, pool, onClose, onSaved }: {
+  person: PersonView["person"];
+  pool: string[];
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [name, setName] = useState(person.displayName);
+  const [goesBy, setGoesBy] = useState(person.goesBy ?? "");
+  const [saying, setSaying] = useState(person.pronunciation ?? "");
+  const [role, setRole] = useState(person.role ?? "");
+  const [circle, setCircle] = useState<Circle>(person.circle);
+  const [tags, setTags] = useState<string[]>(person.tags);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const save = async () => {
+    const patch: PersonPatch = {
+      displayName: name.trim(),
+      goesBy: goesBy.trim() || null,
+      pronunciation: saying.trim() || null,
+      role: role.trim() || null,
+      circle,
+      tags,
+    };
+    if (!patch.displayName) { setProblem("A name is the one thing it needs."); return; }
+    setBusy(true);
+    setProblem(null);
+    try {
+      await store.updatePerson(person.id, patch);
+      await onSaved();
+    } catch (e) {
+      setProblem(text(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pedit anim" style={style(1)}>
+      <label className="field">
+        <span className="fl">Name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span className="fl">Goes by</span>
+        <input value={goesBy} onChange={(e) => setGoesBy(e.target.value)} maxLength={60} placeholder="Sully" autoComplete="off" />
+      </label>
+      <label className="field">
+        <span className="fl">Say it</span>
+        <input value={saying} onChange={(e) => setSaying(e.target.value)} maxLength={60} placeholder="MAR-kus ELL-er-ee" autoComplete="off" />
+      </label>
+      <label className="field">
+        <span className="fl">Who they are</span>
+        <input value={role} onChange={(e) => setRole(e.target.value)} maxLength={200} placeholder="Two doors down, the blue house" autoComplete="off" />
+      </label>
+
+      <div className="tabs circle-row" style={{ marginTop: 16 }} role="group" aria-label="Circle">
+        {CIRCLES.map((x) => (
+          <button key={x.key} type="button" aria-pressed={circle === x.key} onClick={() => setCircle(x.key)}>{x.label}</button>
+        ))}
+      </div>
+
+      <div className="meta" style={{ marginTop: 14 }}>
+        {tags.map((t) => (
+          <span key={t} className="tg">
+            {t}
+            <button className="x" onClick={() => setTags(tags.filter((y) => y !== t))} aria-label={`Remove ${t}`}>&times;</button>
+          </span>
+        ))}
+        <button className="act" onClick={() => setAdding((v) => !v)}>+ Tag</button>
+      </div>
+      {adding && (
+        <TagAdder
+          pool={pool.filter((t) => !tags.some((h) => h.toLowerCase() === t.toLowerCase()))}
+          onAdd={(t) => { setTags(mergeTags(tags, [t])); setAdding(false); }}
+          onClose={() => setAdding(false)}
+        />
+      )}
+
+      {problem && <p className="why" style={{ color: "var(--alert)" }}>{problem}</p>}
+
+      <div className="meta" style={{ marginTop: 18, gap: 18 }}>
+        <button className="act gold" onClick={save} disabled={busy}>{busy ? "Saving" : "Save"}</button>
+        <button className="act" onClick={onClose} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
 }

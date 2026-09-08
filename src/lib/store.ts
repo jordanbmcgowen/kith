@@ -109,6 +109,23 @@ export type SearchResults = {
   namesOnly?: boolean;
 };
 
+/**
+ * What a person's page lets you change. Only what moved needs to be sent.
+ * Facts, visits and threads are not here: they are derived from notes, and
+ * the place to correct one is the note it came from.
+ */
+export type PersonPatch = {
+  displayName?: string;
+  goesBy?: string | null;
+  pronunciation?: string | null;
+  pronouns?: string | null;
+  role?: string | null;
+  company?: string | null;
+  circle?: Circle;
+  /** The complete list after this edit, not an addition. */
+  tags?: string[];
+};
+
 /** An existing person whose name looks like one the model called new. */
 export type Suggestion = { id: string; displayName: string; role: string | null; similarity: number };
 
@@ -167,6 +184,8 @@ export type Store = {
    * results and the hints instead. Coordinates only ever reorder the list.
    */
   search(q: string, coords?: Coords | null): Promise<SearchResults>;
+  /** Change who someone is. Tags are where employers live. */
+  updatePerson(id: string, patch: PersonPatch): Promise<void>;
 };
 
 export class ApiError extends Error {
@@ -340,6 +359,11 @@ const demoStore: Store = {
     }
     return { results: results.sort((a, b) => b.score - a.score), hints };
   },
+  async updatePerson(id, patch) {
+    const p = DEMO_PEOPLE.find((x) => x.id === id);
+    if (!p) throw new ApiError(404, "No one here");
+    Object.assign(p, patch);
+  },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
 
@@ -440,6 +464,10 @@ const liveStore: Store = {
     // because of where the phone is standing.
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
     return api<SearchResults>(`/api/v1/search?${qs}`);
+  },
+
+  async updatePerson(id, patch) {
+    await api(`/api/v1/people/${encodeURIComponent(id)}`, { ...json(patch), method: "PATCH" });
   },
 };
 

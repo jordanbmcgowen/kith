@@ -356,6 +356,30 @@ a.row:active{background:var(--rule);}
 .loose .tmeta{gap:14px;}
 .loose.off q{opacity:.42;text-decoration:line-through;}
 
+/* Correcting something in place. The words stay where they were; a caret and
+   a gold underline are the only things that say it is live. No box, no card. */
+.it-tap{display:block;width:100%;text-align:left;font:inherit;color:inherit;line-height:inherit;}
+.it-tap:hover{text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--rule-2);}
+.ie{
+  display:block;width:100%;background:none;border:none;border-bottom:1px solid var(--rule-2);
+  color:var(--text);font:inherit;line-height:1.5;padding:0 0 6px;border-radius:0;resize:vertical;
+}
+.ie:focus{outline:none;border-bottom-color:var(--gold);}
+.ie-when{
+  display:flex;align-items:center;gap:12px;margin-top:10px;
+  font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);
+}
+.ie-when input{
+  background:none;border:none;border-bottom:1px solid var(--rule-2);border-radius:0;
+  color:var(--text-2);font-family:var(--mono);font-size:10px;padding:0 0 3px;
+}
+.ie-when input:focus{outline:none;border-bottom-color:var(--gold);}
+.item .acts{display:flex;gap:12px;padding-top:3px;}
+.edited{
+  margin-left:10px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--gold);white-space:nowrap;
+}
+
 /* The inline person picker. A field and a short ruled list, never a modal. */
 .picker{margin-top:10px;border-top:1px solid var(--rule-2);}
 .picker .field{padding:10px 0;}
@@ -373,6 +397,16 @@ a.row:active{background:var(--rule);}
 }
 .tg button{color:var(--text-3);font-size:13px;line-height:1;padding:0 1px;}
 .tg button:hover{color:var(--text);}
+
+/* Editing who someone is, in place on their own page. Labelled lines, not a
+   form: the same hairline fields as everywhere else, nothing boxed. */
+.pedit{padding:6px 0 2px;border-bottom:1px solid var(--rule);}
+.pedit .field{gap:14px;}
+.pedit .field .fl{
+  flex:0 0 84px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-3);
+}
+.pedit .field input{font-size:15px;}
 
 /* ───────────────────────────── person detail ───────────────────────────── */
 .phead{display:flex;gap:16px;align-items:flex-start;padding:14px 0 20px;}

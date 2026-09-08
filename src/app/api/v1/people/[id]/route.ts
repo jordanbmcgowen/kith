@@ -2,10 +2,103 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { route, isUuid } from "@/lib/api";
 import { db, users, people, facts, interactions, threads, places, personPlaces, captures, looseThreads } from "@/db";
-import { cadenceFor, CADENCE_DEFAULTS } from "@/lib/warmth";
+import { cadenceFor, CADENCE_DEFAULTS, warmth as computeWarmth } from "@/lib/warmth";
+import { mergeTags } from "@/lib/decisions";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { z } from "zod";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/** Must match the `circle_kind` enum in src/db/schema.ts. */
+const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
+
+/**
+ * What a person's page lets you change. Every field is optional: a PATCH says
+ * only what moved. A null clears a field; leaving it out leaves it alone.
+ *
+ * Not here on purpose: facts, visits and threads. Those are derived from
+ * notes, and the place to correct one is the note it came from, where the
+ * correction survives a re-file.
+ */
+const PersonPatch = z.object({
+  displayName: z.string().trim().min(1).max(120).optional(),
+  goesBy: z.string().trim().max(60).nullish(),
+  pronunciation: z.string().trim().max(60).nullish(),
+  pronouns: z.string().trim().max(40).nullish(),
+  role: z.string().trim().max(200).nullish(),
+  company: z.string().trim().max(120).nullish(),
+  circle: z.enum(CIRCLES).optional(),
+  /** The complete list after this edit, not an addition. One spelling per tag. */
+  tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+}).strict();
+
+/**
+ * PATCH /api/v1/people/:id
+ *
+ * Edit who someone is: their name, how you say it, what they are to you,
+ * their circle, and their tags. Tags are where employers live, which is what
+ * makes "everyone I know at Neighborly" a thing you can ask for. A circle is
+ * one of five and sets the cadence, so warmth is recomputed after any change
+ * rather than left saying something that is no longer true.
+ */
+export const PATCH = route(async (req: Request, ctx: Ctx) => {
+  const userId = await requireUser();
+  const { id } = await ctx.params;
+  if (!isUuid(id)) return NextResponse.json({ error: "No one here" }, { status: 404 });
+
+  const parsed = PersonPatch.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return NextResponse.json({ error: `${issue?.path.join(".") || "body"}: ${issue?.message}` }, { status: 400 });
+  }
+  const body = parsed.data;
+  if (!Object.keys(body).length) return NextResponse.json({ error: "Nothing to change" }, { status: 400 });
+
+  const d = db();
+  const before = await d.query.people.findFirst({
+    where: and(eq(people.id, id), eq(people.userId, userId)),
+    columns: { id: true, circle: true, cadenceDays: true },
+  });
+  if (!before) return NextResponse.json({ error: "No one here" }, { status: 404 });
+
+  // An empty string is the user clearing a field, same as null.
+  const blankToNull = (v: string | null | undefined) => (v === undefined ? undefined : v?.trim() ? v.trim() : null);
+  const patch = {
+    ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+    ...(body.goesBy !== undefined ? { goesBy: blankToNull(body.goesBy) } : {}),
+    ...(body.pronunciation !== undefined ? { pronunciation: blankToNull(body.pronunciation) } : {}),
+    ...(body.pronouns !== undefined ? { pronouns: blankToNull(body.pronouns) } : {}),
+    ...(body.role !== undefined ? { role: blankToNull(body.role) } : {}),
+    ...(body.company !== undefined ? { company: blankToNull(body.company) } : {}),
+    ...(body.circle !== undefined ? { circle: body.circle } : {}),
+    ...(body.tags !== undefined ? { tags: mergeTags([], body.tags) } : {}),
+    updatedAt: new Date(),
+  };
+
+  const [row] = await d.update(people).set(patch)
+    .where(and(eq(people.id, id), eq(people.userId, userId)))
+    .returning({ id: people.id, circle: people.circle, cadenceDays: people.cadenceDays, lastInteractionAt: people.lastInteractionAt });
+
+  // The cadence that applies may have moved, and warmth is read against it.
+  const [prefs, agg] = await Promise.all([
+    d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } }),
+    d.execute(sql`
+      select count(*) filter (where occurred_at > now() - interval '90 days') recent,
+             max(occurred_at) last
+      from ${interactions} where user_id = ${userId} and person_id = ${id}`),
+  ]);
+  const a = agg.rows[0] as { recent: unknown; last: string | Date | null };
+  const last = a?.last ? new Date(a.last) : row.lastInteractionAt;
+  await d.update(people)
+    .set({ warmth: computeWarmth({
+      lastInteractionAt: last,
+      cadenceDays: cadenceFor(row, prefs?.cadenceDefaults ?? CADENCE_DEFAULTS),
+      interactionsLast90: Number(a?.recent ?? 0),
+    }) })
+    .where(and(eq(people.id, id), eq(people.userId, userId)));
+
+  return NextResponse.json({ ok: true });
+});
 
 /**
  * GET /api/v1/people/:id

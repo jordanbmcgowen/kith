@@ -219,10 +219,40 @@ Built, step 5 of the build order (search):
   minutes rather than two, because the queue backs off 30s then 60s before a
   second attempt and a slow model call was timing the run out.
 
+Built, from use (not from the build order):
+
+Jordan used the app and two things came back. Both are built.
+
+- **Corrections.** A fact, a visit, a follow-up or a loose thread was keep or
+  drop, nothing else, so a fact that was 80% right could only be thrown away.
+  Now the words on the confirmation screen are tappable: change them, Done.
+  `FilingDecisions` carries an optional `text` per item (plus `at` on a visit
+  and `dueAt` on a follow-up), and filing writes those instead of the model's
+  when they are there. The transcript is never touched. Facts are derived, so
+  a correction is a re-file, and the edited words are what gets embedded.
+  Dropping and undoing keeps a correction: the toggle spreads rather than
+  replacing.
+- **Employers are tags, not circles.** Jordan asked for the work circle to
+  become specific brands. Tags do it and circles cannot: a circle holds one
+  value, so the day someone changes jobs a company-as-circle overwrites the
+  history that was the point, and circles also set the cadence and the four
+  colors. A tag list holds Yum and Neighborly at once. Verified on the
+  deployment: a note saying someone "just moved to Brightwater Logistics from
+  Halloway Foods" now tags them with both.
+- `PATCH /api/v1/people/:id` and an editor on a person's page: name, goes by,
+  pronunciation, who they are, circle, tags. Strict body; an empty string
+  clears a field; tags keep one spelling; warmth is recomputed after, because
+  the circle sets the cadence warmth is read against. That is what lets the
+  existing roster get brand tags without re-recording a note about each person.
+  Facts, visits and threads are deliberately NOT editable there: they come
+  from notes, and the note is where a correction survives a re-file.
+- `src/components/TagAdder.tsx` is shared by the confirmation screen and the
+  person page, so a tag is added one way.
+
 Not built yet:
 
 - The Today and You screens. Placeholder tabs.
-- Marking a thread done; editing, merging or deleting people.
+- Marking a thread done; merging or deleting people.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
@@ -244,8 +274,10 @@ Do not skip ahead. Each step is testable on its own.
 5. Search. Built; see above.
 6. Then, and only then, Google Calendar and Contacts sync.
 
-Jordan should use it on himself for two weeks after step 5 before anything
-gets added. If he stops using it, no feature saves it.
+After step 5 the build order stops being the thing that decides what is next.
+What Jordan hits while using it does. Build what use surfaced; leave what only
+a roadmap wants until he feels its absence. If he stops using it, no feature
+saves it.
 
 ## Conventions
 
@@ -330,8 +362,11 @@ or no.
   with a temporary session; it always stops at needs_review. Ask first.
 - Never `pkill -f` anything; it has matched the session's own shell. Kill by
   PID or by port.
-- Stops that need a yes: a migration, a deploy, a re-run on real notes, any
-  change to the extraction prompt (show the wording first).
+- Stops that need a yes: a migration, and anything that destroys data Jordan
+  cannot get back. He has since said deploys, prompt changes and ordinary
+  building do not need asking, only telling: show the prompt wording in the
+  report rather than waiting on it. Never re-run extraction on a note he is
+  in the middle of reviewing.
 
 ## Design direction
 
