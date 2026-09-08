@@ -90,6 +90,25 @@ export type PersonView = {
   notes: { id: string; kind: CaptureSummary["kind"]; status: CaptureStatus; capturedAt: string; placeHint: string | null; excerpt: string }[];
 };
 
+/** One person search found, with the reason it found them. */
+export type SearchHit = {
+  person: PersonRow;
+  /** 0-1. Orders the list. Never shown: a number here would read as a judgment. */
+  score: number;
+  /** Why this person matched, in the app's own words. The screen shows it. */
+  why: string;
+  /** When the matched fact or visit happened, for the screen to say. Null for a name, tag or role. */
+  at: string | null;
+};
+
+export type SearchResults = {
+  results: SearchHit[];
+  /** "Try one", under an empty field. Words from the user's own rows, or none. */
+  hints: string[];
+  /** The processor did not answer, so only names, tags and roles were searched. */
+  namesOnly?: boolean;
+};
+
 /** An existing person whose name looks like one the model called new. */
 export type Suggestion = { id: string; displayName: string; role: string | null; similarity: number };
 
@@ -143,6 +162,11 @@ export type Store = {
   people(filter?: PeopleFilter): Promise<PeopleList>;
   /** One person with everything the person page shows. 404 becomes an ApiError. */
   person(id: string): Promise<PersonView>;
+  /**
+   * Names, tags, roles, facts and visits. Under two characters it returns no
+   * results and the hints instead. Coordinates only ever reorder the list.
+   */
+  search(q: string, coords?: Coords | null): Promise<SearchResults>;
 };
 
 export class ApiError extends Error {
@@ -299,6 +323,23 @@ const demoStore: Store = {
       ...detail,
     };
   },
+  async search(q) {
+    // A plain substring stand-in for the real thing, in the same order the API
+    // ranks: name, then tag, then role, then something you said about them.
+    const s = q.trim().toLowerCase();
+    const hints = [...new Set(DEMO_PEOPLE.flatMap((p) => p.tags))].slice(0, 3);
+    if (s.length < 2) return { results: [], hints };
+    const results: SearchHit[] = [];
+    for (const person of DEMO_PEOPLE) {
+      const tag = person.tags.find((t) => t.toLowerCase().includes(s));
+      const fact = DEMO_DETAIL[person.id]?.facts.find((f) => f.content.toLowerCase().includes(s));
+      if (person.displayName.toLowerCase().includes(s)) results.push({ person, score: 1, why: "Their name", at: null });
+      else if (tag) results.push({ person, score: 0.8, why: `Tag / ${tag}`, at: null });
+      else if (person.role?.toLowerCase().includes(s)) results.push({ person, score: 0.72, why: `Role / ${person.role}`, at: null });
+      else if (fact) results.push({ person, score: 0.55, why: `Fact / ${fact.content.slice(0, 80)}`, at: fact.createdAt });
+    }
+    return { results: results.sort((a, b) => b.score - a.score), hints };
+  },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
 
@@ -391,6 +432,14 @@ const liveStore: Store = {
 
   person(id) {
     return api<PersonView>(`/api/v1/people/${encodeURIComponent(id)}`);
+  },
+
+  search(q, coords) {
+    const qs = new URLSearchParams({ q });
+    // Ranking only. The API never filters on this, and nothing is hidden
+    // because of where the phone is standing.
+    if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
+    return api<SearchResults>(`/api/v1/search?${qs}`);
   },
 };
 

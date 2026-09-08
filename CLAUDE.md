@@ -149,19 +149,58 @@ Built, step 4 of the build order (person detail, read only):
   you see them. Open threads and places hide when empty; Remember first and
   History say so in one line.
 - `src/components/TabBar.tsx` in the Shell on every signed-in screen:
-  Today, People, the mic, Find, You. People and the mic are live; the other
-  three are dimmed and inert (`.nv.soon`) until their steps.
+  Today, People, the mic, Find, You. People, the mic and Find are live;
+  Today and You are dimmed and inert (`.nv.soon`) until their steps.
 - On the confirmation screen a person with a row links to their page
   (`.nm-link`), including people kept from an earlier read.
 - `src/lib/format.ts`: dates and due lines as the people screens say them.
   The model writes channels loosely ("in-person"); `fmtChannel` normalises
   them and says nothing for in person, because the place says it.
 
-Step 4 is deployed and merged. Search is next.
+Step 4 is deployed and merged.
+
+Built, step 5 of the build order (search):
+
+- `GET /api/v1/search?q=&lat=&lng=`: hybrid, and every result says why it
+  matched. Trigram (`word_similarity`, not `similarity`) over names, tags and
+  roles for when you remember the word; cosine over facts and visits for when
+  you only remember the shape of the thing. A name outranks a tag outranks a
+  role outranks something you said about them, so typing a name gets the name.
+  The gates were measured against the real data, not guessed: `word_similarity`
+  scores a real first name or surname at 1.0 while a whole sentence tops out
+  near 0.1 across the roster, and cosine between unrelated facts sits at 0.20
+  with only the top 1% past 0.50. Under two characters it returns an empty list
+  and the hints, never an error. No migration: `pg_trgm`, `vector` and the
+  three indexes it needs already exist.
+- The query is embedded through the `PROCESSOR` service binding, as the
+  confirm route does. If the processor cannot answer, the route returns the
+  trigram half with `namesOnly: true` and the screen says so in one line.
+  Visibly half a search beats a blank screen; it is never silent.
+- Location adds and never filters. `lat`/`lng` add at most `MAX_LOCATION_BOOST`
+  (0.08) to people you are usually near, enough to reorder near-ties and never
+  enough to overturn a name. The Find screen does not ask for the phone's
+  position yet: with no places yet the prompt would buy nothing.
+- "Try one" under an empty field is built from the user's own rows: their
+  most-used tags first, then the commonest words in the roles they wrote,
+  deduped so one hint never hides inside another. A new account gets none.
+  Nothing is invented, and no person's name is ever offered as an example.
+- `store.search(q, coords?)` in both stores; `SearchHit`, `SearchResults` in
+  `src/lib/store.ts`. The why line comes back formed; the date it happened
+  comes back separately as `at` so the screen says it in the phone's own zone.
+- `src/components/FindScreen.tsx` at `/find`: the field with the gold underline
+  on focus, the query in the URL (so a tapped result comes back to the same
+  search), 250ms settle before it asks, results as the same `PersonRow` the
+  people list draws with the why line under each, and "Nothing yet. Kith only
+  knows what you have told it." A result is `.hit`: the row and its why line
+  inside one hairline, so the reason stays with the person it belongs to.
+- The live check grew section K: the empty, one-character and signed-out cases,
+  a name by trigram, a fact and a visit by cosine (which is what proves the
+  processor binding, since trigram never reads either), a second throwaway
+  account whose person must never come back, and one temporary place to prove
+  the location boost lifts and never filters. Section L removes all of it.
 
 Not built yet:
 
-- Search (step 5). Find is a placeholder tab until then.
 - The Today and You screens. Placeholder tabs.
 - Marking a thread done; editing, merging or deleting people.
 - PWA manifest and service worker
@@ -182,7 +221,7 @@ Do not skip ahead. Each step is testable on its own.
    This screen decides whether the product feels like magic or homework.
    Built; see above.
 4. Person detail, read only. Built; see above.
-5. Search. The API already works once there are ~30 embedded facts.
+5. Search. Built; see above.
 6. Then, and only then, Google Calendar and Contacts sync.
 
 Jordan should use it on himself for two weeks after step 5 before anything
