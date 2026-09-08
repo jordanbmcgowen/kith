@@ -104,7 +104,8 @@ try {
   const detail = await page.request.get(`${BASE}/api/v1/captures/${legacy.id}`);
   check("GET /api/v1/captures/:id is 200", detail.status() === 200, detail.status());
   const dj = await detail.json();
-  check("legacy note reconstructs a filing record", dj.capture.filing?.by === "legacy" && dj.capture.filing.created.length > 0, dj.capture.filing);
+  // Reconstructed on read for a note filed before captures.filing existed; stored once it has been filed since.
+  check("the roster note carries a filing record, reconstructed or stored", ["legacy", "user", "auto"].includes(dj.capture.filing?.by) && dj.capture.filing.created.length > 0, dj.capture.filing?.by);
   check("roster and suggestions come back", Array.isArray(dj.people) && dj.people.length > 30 && typeof dj.suggestions === "object", dj.people?.length);
   const bad = await page.request.get(`${BASE}/api/v1/captures/not-a-uuid`);
   check("a malformed id is a 404, not a 500", bad.status() === 404, bad.status());
@@ -115,8 +116,8 @@ try {
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
   await page.screenshot({ path: `${OUT}/01-record.png`, fullPage: true });
   const bar = await page.locator(".bar").innerText();
-  check("status bar shows the review count", /\d+ to review/i.test(bar), bar);
-  const waitingBefore = Number((bar.match(/(\d+) to review/i) ?? [])[1] ?? 0);
+  const waitingBefore = ((await (await page.request.get(`${BASE}/api/v1/captures?status=needs_review`)).json()).captures ?? []).length;
+  check("status bar shows the review count, and nothing when nothing waits", waitingBefore ? bar.toLowerCase().includes(`${waitingBefore} to review`) : !/to review/i.test(bar), { bar, waitingBefore });
   check("Recent rows are links to notes", (await page.locator("a.row[href^='/notes/']").count()) >= 3);
 
   /* C. a real legacy note opens read only */
@@ -124,7 +125,8 @@ try {
   await page.waitForSelector(".pb", { timeout: 20000 });
   await page.screenshot({ path: `${OUT}/02-legacy-note.png`, fullPage: false });
   check("legacy note renders person blocks", (await page.locator(".pb").count()) === legacy.extraction.people.length, await page.locator(".pb").count());
-  check("primary button reads File it for a waiting note", (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  const expectedButton = dj.capture.status === "needs_review" ? "File it" : "Done";
+  check(`primary button reads ${expectedButton} for a ${dj.capture.status === "needs_review" ? "waiting" : "filed"} note`, (await page.locator("button.btn").first().innerText()).trim() === expectedButton);
 
   /* D. type a note that waits (three new people) */
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
@@ -241,7 +243,7 @@ try {
   const loose = await q("select content, dismissed_at from loose_threads where capture_id = $1", [captureId]);
   check("first loose thread dismissed", !x.unresolved.length || loose.some((l) => l.dismissed_at != null), loose);
   const [bar2] = [await page.locator(".bar").innerText()];
-  check("review count is back to what it was before the note", new RegExp(`${waitingBefore} to review`, "i").test(bar2), bar2);
+  check("review count is back to what it was before the note", waitingBefore ? bar2.toLowerCase().includes(`${waitingBefore} to review`) : !/to review/i.test(bar2), { bar2, waitingBefore });
 
   /* G. reopen as filed, change one thing, Done */
   await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
