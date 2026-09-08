@@ -28,8 +28,15 @@ import type { Circle } from "@/db/schema";
 const NAME_GATE = 0.5;
 /** Tags and roles are short strings too, but they belong to more than one person. */
 const WORD_GATE = 0.6;
-/** Cosine. Under this it is the noise floor, not a memory. */
-const VECTOR_GATE = 0.34;
+/** Cosine. Under this it is the noise floor, not a memory. Measured against
+ *  real queries on real data: right answers came back at 0.48 to 0.61 and the
+ *  near-misses at 0.34 to 0.44. */
+const VECTOR_GATE = 0.40;
+/** How far below the best memory a weaker one may still be worth showing. A
+ *  confident hit should not drag four vague ones along behind it. */
+const VECTOR_BAND = 0.15;
+/** One word of a sentence landing on a tag or a role. Whole words only. */
+const WORD_IN_GATE = 0.8;
 /** How many people a screenful is. */
 const LIMIT = 10;
 /** Cap on what standing somewhere may add. Reorders near-ties, never overturns a name. */
@@ -42,7 +49,7 @@ const MAX_Q = 400;
 /** Module constants, not input: inline them so Postgres never has to infer a type. */
 const n = (x: number) => sql.raw(String(x));
 
-type Source = "name" | "tag" | "role" | "fact" | "visit";
+type Source = "name" | "tag" | "role" | "tagword" | "roleword" | "fact" | "visit";
 
 type Hit = {
   person_id: string;
@@ -102,6 +109,27 @@ function searchSql(userId: string, q: string, vec: number[] | null) {
   // pgvector takes its literal as text.
   const v = vec ? `[${vec.join(",")}]` : null;
 
+  // Typing "coffee" finds the three people whose role says coffee. So should
+  // "the guy who does the coffee": the whole sentence scores far too low
+  // against a two-word role, so each word of it gets its own look. The words
+  // are stripped to letters and digits before they reach SQL.
+  const words = queryWords(q);
+  const wordwise = words.length
+    ? sql`
+      union all
+      select p.id, t, 'tagword', null::timestamptz, max(word_similarity(w, t))
+      from ${people} p, unnest(p.tags) t, unnest(string_to_array(${words.join(",")}, ',')) w
+      where p.user_id = ${userId} and p.archived_at is null and word_similarity(w, t) >= ${n(WORD_IN_GATE)}
+      group by p.id, t
+
+      union all
+      select p.id, p.role, 'roleword', null::timestamptz, max(word_similarity(w, p.role))
+      from ${people} p, unnest(string_to_array(${words.join(",")}, ',')) w
+      where p.user_id = ${userId} and p.archived_at is null and p.role is not null
+        and word_similarity(w, p.role) >= ${n(WORD_IN_GATE)}
+      group by p.id, p.role`
+    : sql``;
+
   // Each branch gets its own subquery: an ORDER BY / LIMIT written straight
   // after a UNION ALL binds to the whole union, not to the branch above it.
   const semantic = v
@@ -150,6 +178,7 @@ function searchSql(userId: string, q: string, vec: number[] | null) {
       from ${people} p
       where p.user_id = ${userId} and p.archived_at is null and p.role is not null
         and word_similarity(${q}, p.role) >= ${n(WORD_GATE)}
+      ${wordwise}
       ${semantic}
     ),
     scored as (
@@ -158,18 +187,36 @@ function searchSql(userId: string, q: string, vec: number[] | null) {
       -- are what keep a weak trigram from beating a real memory.
       select person_id, snippet, source, at,
              case source
-               when 'name'  then 0.60 + 0.40 * raw
-               when 'tag'   then 0.50 + 0.30 * raw
-               when 'role'  then 0.45 + 0.30 * raw
-               when 'visit' then raw * 0.97
+               when 'name'     then 0.60 + 0.40 * raw
+               when 'tag'      then 0.50 + 0.30 * raw
+               when 'role'     then 0.45 + 0.30 * raw
+               -- One word of a sentence landing on a tag or a role is real,
+               -- but it is not the sentence. It sits under a good memory.
+               when 'tagword'  then 0.44 + 0.06 * raw
+               when 'roleword' then 0.42 + 0.06 * raw
+               when 'visit'    then raw * 0.97
                else raw
              end as score
       from merged
-      where source in ('name', 'tag', 'role') or raw >= ${n(VECTOR_GATE)}
+      where source not in ('fact', 'visit') or raw >= ${n(VECTOR_GATE)}
+    ),
+    kept as (
+      -- Cosine has no absolute meaning, only a shape. When one memory answers
+      -- the question at 0.61, the ones at 0.36 are the same few "works in..."
+      -- facts that every work-shaped question drags along, and printing them
+      -- costs more trust than the chance one was wanted. So a confident hit
+      -- raises the floor under the weaker ones. This happens before a person
+      -- is reduced to their best row, so someone whose fact is cut can still
+      -- come back on their name or their tag.
+      select * from (
+        select s.*, max(case when source in ('fact', 'visit') then score end) over () as top_vector
+        from scored s
+      ) w
+      where source not in ('fact', 'visit') or score >= top_vector - ${n(VECTOR_BAND)}
     ),
     best as (
       select distinct on (person_id) person_id, snippet, source, at, score
-      from scored order by person_id, score desc
+      from kept order by person_id, score desc
     )
     select b.person_id, b.score, b.snippet, b.source, b.at,
            p.display_name, p.goes_by, p.pronunciation, p.circle, p.tags, p.role,
@@ -269,14 +316,33 @@ function why(r: Hit, place?: string): string {
     case "name": return `Their name${near}`;
     // The row shows every tag, so name the one that caught. It shows the role
     // in full, so repeating it under the row says nothing.
-    case "tag": return `Tag / ${r.snippet}${near}`;
-    case "role": return `Their role${near}`;
+    case "tag": case "tagword": return `Tag / ${r.snippet}${near}`;
+    case "role": case "roleword": return `Their role${near}`;
     case "visit": return `Visit / ${excerpt(r.snippet, 80)}${near}`;
     default: return `Fact / ${excerpt(r.snippet, 80)}${near}`;
   }
 }
 
-const STOP = new Set(["with", "from", "that", "this", "they", "their", "them", "been", "have", "some", "into", "also", "when", "will", "your", "about"]);
+/**
+ * Words that identify nobody. They are dropped from a query before it is
+ * matched word by word against tags and roles, and never offered as a hint.
+ * "works" is in here because half the roles say it: matching on it turns
+ * "who works in consulting" into a list of everyone who works anywhere.
+ */
+const STOP = new Set([
+  "with", "from", "that", "this", "they", "their", "them", "been", "have", "some", "into", "also",
+  "when", "will", "your", "about", "what", "where", "which", "whose", "there", "here", "just",
+  "only", "very", "really", "works", "work", "working", "went", "goes", "going", "does", "doing",
+  "know", "knows", "said", "told", "remember", "someone", "somebody", "anyone", "everyone", "thing", "things",
+]);
+
+/**
+ * A query split into the words worth matching one at a time. Letters and
+ * digits only, so nothing that reaches SQL as a comma-joined list can be
+ * anything else. Three letters or fewer carries too little to match on.
+ */
+const queryWords = (q: string) =>
+  [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP.has(w)))].slice(0, 12);
 
 /**
  * "Try one", under an empty field. Every hint is a word the user typed

@@ -105,12 +105,23 @@ try {
   const list = await page.request.get(`${BASE}/api/v1/captures`);
   check("GET /api/v1/captures with the temp session is 200", list.status() === 200, list.status());
   const rows = (await list.json()).captures;
+  // The note this run drives on screen: the one with the most people on it.
   const legacy = rows.find((c) => c.extraction && c.extraction.people.length > 5) ?? rows[0];
   const detail = await page.request.get(`${BASE}/api/v1/captures/${legacy.id}`);
   check("GET /api/v1/captures/:id is 200", detail.status() === 200, detail.status());
   const dj = await detail.json();
-  check("legacy note reconstructs a filing record", dj.capture.filing?.by === "legacy" && dj.capture.filing.created.length > 0, dj.capture.filing);
   check("roster and suggestions come back", Array.isArray(dj.people) && dj.people.length > 30 && typeof dj.suggestions === "object", dj.people?.length);
+
+  // Reconstruction is for notes filed before captures.filing existed. Once
+  // every note has a real record there is nothing left to reconstruct, so
+  // this asks the database whether the case still exists before asserting it.
+  const [unrecorded] = await q("select id from captures where user_id = $1 and filing is null and status = 'filed' order by captured_at limit 1", [user.id]);
+  if (unrecorded) {
+    const rj = await (await page.request.get(`${BASE}/api/v1/captures/${unrecorded.id}`)).json();
+    check("a note filed before the filing record existed reconstructs one", rj.capture.filing?.by === "legacy" && rj.capture.filing.created.length > 0, rj.capture.filing);
+  } else {
+    console.log("  (no notes left without a filing record; nothing to reconstruct)");
+  }
   const bad = await page.request.get(`${BASE}/api/v1/captures/not-a-uuid`);
   check("a malformed id is a 404, not a 500", bad.status() === 404, bad.status());
   const anon = await (await browser.newContext()).request.get(`${BASE}/api/v1/captures/${legacy.id}`);
@@ -120,8 +131,11 @@ try {
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
   await page.screenshot({ path: `${OUT}/01-record.png`, fullPage: true });
   const bar = await page.locator(".bar").innerText();
-  check("status bar shows the review count", /\d+ to review/i.test(bar), bar);
-  const waitingBefore = Number((bar.match(/(\d+) to review/i) ?? [])[1] ?? 0);
+  // Against the real number, not against there being one: with nothing waiting
+  // the strip is meant to say nothing at all.
+  const waitingBefore = Number((await q("select count(*) n from captures where user_id = $1 and status = 'needs_review'", [user.id]))[0].n);
+  check("the status bar says what is waiting, and stays quiet when nothing is",
+    waitingBefore ? new RegExp(`${waitingBefore} to review`, "i").test(bar) : !/to review/i.test(bar), [bar, waitingBefore]);
   check("Recent rows are links to notes", (await page.locator("a.row[href^='/notes/']").count()) >= 3);
 
   /* C. a real legacy note opens read only */
@@ -129,7 +143,9 @@ try {
   await page.waitForSelector(".pb", { timeout: 20000 });
   await page.screenshot({ path: `${OUT}/02-legacy-note.png`, fullPage: false });
   check("legacy note renders person blocks", (await page.locator(".pb").count()) === legacy.extraction.people.length, await page.locator(".pb").count());
-  check("primary button reads File it for a waiting note", (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  const waits = dj.capture.status === "needs_review";
+  check(`primary button reads ${waits ? "File it" : "Done"} for a ${dj.capture.status} note`,
+    (await page.locator("button.btn").first().innerText()).trim() === (waits ? "File it" : "Done"));
 
   /* D. type a note that waits (three new people) */
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
@@ -246,7 +262,8 @@ try {
   const loose = await q("select content, dismissed_at from loose_threads where capture_id = $1", [captureId]);
   check("first loose thread dismissed", !x.unresolved.length || loose.some((l) => l.dismissed_at != null), loose);
   const [bar2] = [await page.locator(".bar").innerText()];
-  check("review count is back to what it was before the note", new RegExp(`${waitingBefore} to review`, "i").test(bar2), bar2);
+  check("review count is back to what it was before the note",
+    waitingBefore ? new RegExp(`${waitingBefore} to review`, "i").test(bar2) : !/to review/i.test(bar2), [bar2, waitingBefore]);
 
   /* G. reopen as filed, change one thing, Done */
   await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
@@ -266,18 +283,25 @@ try {
   /* H. Read it again: the rerun path the legacy notes will use */
   const rr = await page.request.post(`${BASE}/api/v1/captures/${captureId}/rerun`);
   check("rerun accepted", rr.status() === 202, rr.status());
+  // The queue backs off 30s then 60s before a second attempt, so a re-run that
+  // hits one slow model call needs more than two minutes to come back.
   let s2 = "uploaded";
-  for (let i = 0; i < 40 && s2 !== "needs_review" && s2 !== "failed"; i++) {
-    await sleep(3000);
+  for (let i = 0; i < 60 && s2 !== "needs_review" && s2 !== "failed"; i++) {
+    await sleep(5000);
     s2 = (await q("select status from captures where id = $1", [captureId]))[0].status;
   }
   const [cap2] = await q("select status, filing, jsonb_array_length(extraction->'people') n from captures where id = $1", [captureId]);
   check("re-run stops at needs_review, keeps what it created, drops old decisions", cap2.status === "needs_review" && cap2.filing?.decisions === null && cap2.filing?.created.length === createdIds.length, [cap2.status, cap2.filing]);
   check("old rows kept until the next look", Number((await q("select count(*) n from facts where capture_id = $1", [captureId]))[0].n) === f.length);
-  await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
-  await page.waitForSelector(".pb", { timeout: 20000 });
-  await page.screenshot({ path: `${OUT}/08-note-rerun.png`, fullPage: true });
-  check("re-run note shows matched people (they exist now) and File it", (await page.locator(".pb .meta .live", { hasText: /Matched/ }).count()) >= 1 && (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  if (cap2.status === "needs_review") {
+    await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
+    await page.waitForSelector(".pb", { timeout: 20000 });
+    await page.screenshot({ path: `${OUT}/08-note-rerun.png`, fullPage: true });
+    check("re-run note shows matched people (they exist now) and File it", (await page.locator(".pb .meta .live", { hasText: /Matched/ }).count()) >= 1 && (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  } else {
+    // Do not take the rest of the run down with it; the check above already failed.
+    console.log(`  (the re-run is still ${cap2.status}; skipping its screen)`);
+  }
 
   /* I. step 4: the people list, the person page, and the way back to the note */
   const TAG = "Kith Test Board";
@@ -380,8 +404,9 @@ try {
   const fromVisit = V.interactions.length ? await search(first8(V.interactions[0].summary)) : { results: [] };
   const visitHit = fromVisit.results.find((r) => r.person.id === who.id);
   check("words from a visit find the person you were with", !!visitHit, fromVisit.results.map((r) => `${r.person.displayName} ${r.score}`));
-  console.log(`  fact query -> ${factHit?.why}`);
-  console.log(`  visit query -> ${visitHit?.why}`);
+  const whys = [factHit?.why ?? "", visitHit?.why ?? ""];
+  check("both a fact and a visit come back as themselves, so both are searchable",
+    whys.some((w) => /^fact \//i.test(w)) && whys.some((w) => /^visit \//i.test(w)), whys);
 
   // Another account's person must never come back. The only way to prove a
   // tenant filter is to have a second tenant.

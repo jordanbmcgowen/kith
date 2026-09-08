@@ -166,12 +166,25 @@ Built, step 5 of the build order (search):
   roles for when you remember the word; cosine over facts and visits for when
   you only remember the shape of the thing. A name outranks a tag outranks a
   role outranks something you said about them, so typing a name gets the name.
-  The gates were measured against the real data, not guessed: `word_similarity`
-  scores a real first name or surname at 1.0 while a whole sentence tops out
-  near 0.1 across the roster, and cosine between unrelated facts sits at 0.20
-  with only the top 1% past 0.50. Under two characters it returns an empty list
-  and the hints, never an error. No migration: `pg_trgm`, `vector` and the
-  three indexes it needs already exist.
+  Under two characters it returns an empty list and the hints, never an error.
+  No migration: `pg_trgm`, `vector` and the three indexes it needs already
+  exist.
+- Every threshold was measured, first on the data and then on the deployment
+  with real query embeddings. `word_similarity` scores a real first name or
+  surname at 1.0 while a whole sentence tops out near 0.1 across the roster.
+  Right semantic answers came back at 0.48 to 0.61 and the near-misses at 0.34
+  to 0.44, so `VECTOR_GATE` is 0.40. On top of that `VECTOR_BAND` (0.15) lets a
+  confident hit raise the floor under the weaker ones, because otherwise every
+  work-shaped question drags the same four "works in..." facts along behind the
+  answer. The band is applied before a person is reduced to their best row, so
+  someone whose fact is cut can still come back on their name or their tag.
+- A sentence gets matched word by word against tags and roles as well as whole.
+  Typing "coffee" finds the three people whose role says coffee; so does "the
+  guy who does the coffee", which scores far too low as a whole sentence. Those
+  hits sit below a good memory (0.48 and 0.50) and above the noise. Words are
+  stripped to letters and digits, must be four characters or more, and generic
+  ones are dropped: matching on "works" turns "who works in consulting" into a
+  list of everyone who works anywhere.
 - The query is embedded through the `PROCESSOR` service binding, as the
   confirm route does. If the processor cannot answer, the route returns the
   trigram half with `namesOnly: true` and the screen says so in one line.
@@ -198,6 +211,13 @@ Built, step 5 of the build order (search):
   processor binding, since trigram never reads either), a second throwaway
   account whose person must never come back, and one temporary place to prove
   the location boost lifts and never filters. Section L removes all of it.
+- Four older checks were asserting state rather than behaviour and had gone red
+  on their own: they assumed a note still waiting for review and a note filed
+  before `captures.filing` existed. Every note now has a real filing record and
+  nothing is waiting, so those checks ask the database what is true and assert
+  against that, or say there is nothing left to test. The re-run poll waits five
+  minutes rather than two, because the queue backs off 30s then 60s before a
+  second attempt and a slow model call was timing the run out.
 
 Not built yet:
 
