@@ -53,6 +53,7 @@ export const factKindEnum = pgEnum("fact_kind", [
   "sensitive",    // allergies, things not to bring up
   "context",      // current situation, what they're working on
 ]);
+export type FactKind = (typeof factKindEnum.enumValues)[number];
 
 export const threadStatusEnum = pgEnum("thread_status", [
   "open", "done", "dropped",
