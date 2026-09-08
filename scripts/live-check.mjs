@@ -4,9 +4,11 @@
  * It signs in by inserting a temporary row in `sessions` for the first user
  * (that is how Auth.js database sessions work: the cookie is the row's
  * token), types one note with three invented people so it waits for review,
- * opens it, fixes it on the screen, files it, reopens it, re-runs it, and
- * checks the database at every step. Then it deletes exactly what it made:
- * the capture, the people that filing created, and the session row.
+ * opens it, fixes it on the screen, files it, reopens it, re-runs it, reads
+ * the people it made, then searches for them. It checks the database at every
+ * step. Then it deletes exactly what it made: the capture, the people that
+ * filing created, the one place and the second account the search section
+ * needs, and the session row.
  *
  *   npm run live:check
  *
@@ -95,17 +97,31 @@ page.on("requestfailed", (r) => console.log("  request failed:", r.url().slice(0
 
 let captureId = null;
 let createdIds = [];
+// Section K makes these and section L removes them, whatever happens in between.
+let placeId = null;
+let otherUserId = null;
 try {
   /* A. auth and the new GET route on a real note, read only */
   const list = await page.request.get(`${BASE}/api/v1/captures`);
   check("GET /api/v1/captures with the temp session is 200", list.status() === 200, list.status());
   const rows = (await list.json()).captures;
+  // The note this run drives on screen: the one with the most people on it.
   const legacy = rows.find((c) => c.extraction && c.extraction.people.length > 5) ?? rows[0];
   const detail = await page.request.get(`${BASE}/api/v1/captures/${legacy.id}`);
   check("GET /api/v1/captures/:id is 200", detail.status() === 200, detail.status());
   const dj = await detail.json();
-  check("legacy note reconstructs a filing record", dj.capture.filing?.by === "legacy" && dj.capture.filing.created.length > 0, dj.capture.filing);
   check("roster and suggestions come back", Array.isArray(dj.people) && dj.people.length > 30 && typeof dj.suggestions === "object", dj.people?.length);
+
+  // Reconstruction is for notes filed before captures.filing existed. Once
+  // every note has a real record there is nothing left to reconstruct, so
+  // this asks the database whether the case still exists before asserting it.
+  const [unrecorded] = await q("select id from captures where user_id = $1 and filing is null and status = 'filed' order by captured_at limit 1", [user.id]);
+  if (unrecorded) {
+    const rj = await (await page.request.get(`${BASE}/api/v1/captures/${unrecorded.id}`)).json();
+    check("a note filed before the filing record existed reconstructs one", rj.capture.filing?.by === "legacy" && rj.capture.filing.created.length > 0, rj.capture.filing);
+  } else {
+    console.log("  (no notes left without a filing record; nothing to reconstruct)");
+  }
   const bad = await page.request.get(`${BASE}/api/v1/captures/not-a-uuid`);
   check("a malformed id is a 404, not a 500", bad.status() === 404, bad.status());
   const anon = await (await browser.newContext()).request.get(`${BASE}/api/v1/captures/${legacy.id}`);
@@ -115,8 +131,11 @@ try {
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
   await page.screenshot({ path: `${OUT}/01-record.png`, fullPage: true });
   const bar = await page.locator(".bar").innerText();
-  check("status bar shows the review count", /\d+ to review/i.test(bar), bar);
-  const waitingBefore = Number((bar.match(/(\d+) to review/i) ?? [])[1] ?? 0);
+  // Against the real number, not against there being one: with nothing waiting
+  // the strip is meant to say nothing at all.
+  const waitingBefore = Number((await q("select count(*) n from captures where user_id = $1 and status = 'needs_review'", [user.id]))[0].n);
+  check("the status bar says what is waiting, and stays quiet when nothing is",
+    waitingBefore ? new RegExp(`${waitingBefore} to review`, "i").test(bar) : !/to review/i.test(bar), [bar, waitingBefore]);
   check("Recent rows are links to notes", (await page.locator("a.row[href^='/notes/']").count()) >= 3);
 
   /* C. a real legacy note opens read only */
@@ -124,7 +143,9 @@ try {
   await page.waitForSelector(".pb", { timeout: 20000 });
   await page.screenshot({ path: `${OUT}/02-legacy-note.png`, fullPage: false });
   check("legacy note renders person blocks", (await page.locator(".pb").count()) === legacy.extraction.people.length, await page.locator(".pb").count());
-  check("primary button reads File it for a waiting note", (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  const waits = dj.capture.status === "needs_review";
+  check(`primary button reads ${waits ? "File it" : "Done"} for a ${dj.capture.status} note`,
+    (await page.locator("button.btn").first().innerText()).trim() === (waits ? "File it" : "Done"));
 
   /* D. type a note that waits (three new people) */
   await page.goto(`${BASE}/record`, { waitUntil: "networkidle" });
@@ -241,7 +262,8 @@ try {
   const loose = await q("select content, dismissed_at from loose_threads where capture_id = $1", [captureId]);
   check("first loose thread dismissed", !x.unresolved.length || loose.some((l) => l.dismissed_at != null), loose);
   const [bar2] = [await page.locator(".bar").innerText()];
-  check("review count is back to what it was before the note", new RegExp(`${waitingBefore} to review`, "i").test(bar2), bar2);
+  check("review count is back to what it was before the note",
+    waitingBefore ? new RegExp(`${waitingBefore} to review`, "i").test(bar2) : !/to review/i.test(bar2), [bar2, waitingBefore]);
 
   /* G. reopen as filed, change one thing, Done */
   await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
@@ -261,18 +283,25 @@ try {
   /* H. Read it again: the rerun path the legacy notes will use */
   const rr = await page.request.post(`${BASE}/api/v1/captures/${captureId}/rerun`);
   check("rerun accepted", rr.status() === 202, rr.status());
+  // The queue backs off 30s then 60s before a second attempt, so a re-run that
+  // hits one slow model call needs more than two minutes to come back.
   let s2 = "uploaded";
-  for (let i = 0; i < 40 && s2 !== "needs_review" && s2 !== "failed"; i++) {
-    await sleep(3000);
+  for (let i = 0; i < 60 && s2 !== "needs_review" && s2 !== "failed"; i++) {
+    await sleep(5000);
     s2 = (await q("select status from captures where id = $1", [captureId]))[0].status;
   }
   const [cap2] = await q("select status, filing, jsonb_array_length(extraction->'people') n from captures where id = $1", [captureId]);
   check("re-run stops at needs_review, keeps what it created, drops old decisions", cap2.status === "needs_review" && cap2.filing?.decisions === null && cap2.filing?.created.length === createdIds.length, [cap2.status, cap2.filing]);
   check("old rows kept until the next look", Number((await q("select count(*) n from facts where capture_id = $1", [captureId]))[0].n) === f.length);
-  await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
-  await page.waitForSelector(".pb", { timeout: 20000 });
-  await page.screenshot({ path: `${OUT}/08-note-rerun.png`, fullPage: true });
-  check("re-run note shows matched people (they exist now) and File it", (await page.locator(".pb .meta .live", { hasText: /Matched/ }).count()) >= 1 && (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  if (cap2.status === "needs_review") {
+    await page.goto(`${BASE}/notes/${captureId}`, { waitUntil: "networkidle" });
+    await page.waitForSelector(".pb", { timeout: 20000 });
+    await page.screenshot({ path: `${OUT}/08-note-rerun.png`, fullPage: true });
+    check("re-run note shows matched people (they exist now) and File it", (await page.locator(".pb .meta .live", { hasText: /Matched/ }).count()) >= 1 && (await page.locator("button.btn").first().innerText()).trim() === "File it");
+  } else {
+    // Do not take the rest of the run down with it; the check above already failed.
+    console.log(`  (the re-run is still ${cap2.status}; skipping its screen)`);
+  }
 
   /* I. step 4: the people list, the person page, and the way back to the note */
   const TAG = "Kith Test Board";
@@ -311,7 +340,7 @@ try {
   check("the stamp counts the filtered view", /^\d+ of \d+/i.test((await page.locator(".stamp").first().innerText()).trim()), await page.locator(".stamp").first().innerText());
   check("the circle row has six words", (await page.locator(".tabs.circle-row button").count()) === 6);
   check("tab bar: People is current and the mic goes to record", (await page.locator(".nav .nv[aria-current='true']").innerText()).trim().toLowerCase() === "people" && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
-  check("tab bar: Today, Find and You are placeholders", (await page.locator(".nav .nv.soon").count()) === 3);
+  check("tab bar: Today and You are the placeholders left", (await page.locator(".nav .nv.soon").count()) === 2 && (await page.locator(".nav a[href='/find']").count()) === 1);
 
   // the person page
   await page.locator(`a.row[href='/people/${who.id}']`).click();
@@ -342,12 +371,112 @@ try {
   await page.goto(`${BASE}/people/00000000-0000-4000-8000-00000000dead`, { waitUntil: "networkidle" });
   await page.waitForSelector(".empty", { timeout: 20000 });
   check("an unknown person is a clean empty state", /no one here/i.test(await page.locator(".empty").innerText()));
+
+  /* K. step 5: search */
+  const search = async (q, extra = "") =>
+    (await page.request.get(`${BASE}/api/v1/search?q=${encodeURIComponent(q)}${extra}`)).json();
+
+  const s0 = await page.request.get(`${BASE}/api/v1/search?q=`);
+  const sj0 = await s0.json();
+  check("GET /api/v1/search?q= is 200 with no results", s0.status() === 200 && Array.isArray(sj0.results) && sj0.results.length === 0, s0.status());
+  check("an empty query answers with hints in the user's own words", Array.isArray(sj0.hints) && sj0.hints.length > 0 && sj0.hints.every((h) => typeof h === "string" && h.trim()), sj0.hints);
+  const s1 = await page.request.get(`${BASE}/api/v1/search?q=a`);
+  check("one character is an empty list, not an error", s1.status() === 200 && (await s1.json()).results.length === 0, s1.status());
+  check("search signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/search?q=test`)).status() === 401);
+
+  // A name, by trigram.
+  const byName = await search(who.displayName);
+  const top = byName.results[0];
+  check("a name puts that person at the top", top?.person?.id === who.id, byName.results.map((r) => r.person.displayName));
+  check("the why line says the name is what caught", /their name/i.test(top?.why ?? ""), top?.why);
+  check("the processor answered: this was not the names-only fallback", byName.namesOnly === undefined, byName.namesOnly);
+  check("a result carries the row the people list draws, and no tenant column",
+    ["id", "displayName", "goesBy", "pronunciation", "circle", "tags", "role", "lastInteractionAt", "warmth"].every((k) => k in (top?.person ?? {}))
+    && typeof top?.score === "number" && !("userId" in (top?.person ?? {})), Object.keys(top?.person ?? {}));
+
+  // Facts and visits, by cosine. Trigram never reads either one, so a hit here
+  // can only have come back through the embedding kith-processor made.
+  const first8 = (s) => s.split(/\s+/).slice(0, 8).join(" ");
+  const fromFact = V.facts.length ? await search(first8(V.facts[0].content)) : { results: [] };
+  const factHit = fromFact.results.find((r) => r.person.id === who.id);
+  check("words from a fact find the person that fact is about", !!factHit, fromFact.results.map((r) => `${r.person.displayName} ${r.score}`));
+  check("that why line reads it back, with the date it happened", /^(fact|visit) \//i.test(factHit?.why ?? "") && !!factHit?.at, [factHit?.why, factHit?.at]);
+  const fromVisit = V.interactions.length ? await search(first8(V.interactions[0].summary)) : { results: [] };
+  const visitHit = fromVisit.results.find((r) => r.person.id === who.id);
+  check("words from a visit find the person you were with", !!visitHit, fromVisit.results.map((r) => `${r.person.displayName} ${r.score}`));
+  const whys = [factHit?.why ?? "", visitHit?.why ?? ""];
+  check("both a fact and a visit come back as themselves, so both are searchable",
+    whys.some((w) => /^fact \//i.test(w)) && whys.some((w) => /^visit \//i.test(w)), whys);
+
+  // Another account's person must never come back. The only way to prove a
+  // tenant filter is to have a second tenant.
+  otherUserId = randomUUID();
+  await q("insert into users (id, name, email) values ($1, $2, $3)", [otherUserId, "Kith Test Other", `kith-test-${otherUserId}@example.invalid`]);
+  await q("insert into people (user_id, display_name, circle, tags, role) values ($1, $2, 'other', $3, $4)",
+    [otherUserId, "Kith Test Delta", [TAG], "belongs to the other account"]);
+  const leak = await search("Kith Test Delta");
+  check("another account's person never comes back", !leak.results.some((r) => /Delta/.test(r.person.displayName)), leak.results.map((r) => r.person.displayName));
+  const leakTag = await search(TAG);
+  check("nor under a tag both accounts happen to use", !leakTag.results.some((r) => /Delta/.test(r.person.displayName)), leakTag.results.map((r) => r.person.displayName));
+
+  // Location adds to ranking and never filters. There are no places yet, so
+  // this makes one and section L removes it.
+  const [pl] = await q("insert into places (user_id, name, lat, lng, radius_m) values ($1, $2, $3, $4, $5) returning id",
+    [user.id, "Kith Test Hall", 32.8, -96.8, 150]);
+  placeId = pl.id;
+  await q("insert into person_places (person_id, place_id, user_id, weight, last_seen_at) values ($1, $2, $3, 5, now())", [who.id, placeId, user.id]);
+  const away = await search(TAG);
+  const here = await search(TAG, "&lat=32.8&lng=-96.8");
+  const wasThere = away.results.find((r) => r.person.id === who.id);
+  const isThere = here.results.find((r) => r.person.id === who.id);
+  check("standing at a place lifts the people you see there", !!wasThere && !!isThere && isThere.score > wasThere.score, [wasThere?.score, isThere?.score]);
+  check("and the why line says where", /near kith test hall/i.test(isThere?.why ?? ""), isThere?.why);
+  check("location added nobody and removed nobody", here.results.length === away.results.length, [away.results.length, here.results.length]);
+
+  // The screen
+  await page.goto(`${BASE}/find`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".block .row", { timeout: 20000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${OUT}/11-find.png`, fullPage: true });
+  check("the empty field offers every hint the API sent", (await page.locator(".block .row .recall").count()) === sj0.hints.length, await page.locator(".block .row .recall").count());
+  check("tab bar: Find is current, Today and You are the placeholders",
+    (await page.locator(".nav .nv[aria-current='true'] .nl").innerText()).trim().toLowerCase() === "find"
+    && (await page.locator(".nav .nv.soon").count()) === 2);
+
+  await page.locator("#q").fill(who.displayName);
+  await page.waitForSelector(".hit", { timeout: 20000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${OUT}/12-find-results.png`, fullPage: true });
+  check("the result is a person row with its why line under it",
+    (await page.locator(`.hit a.row[href='/people/${who.id}']`).count()) === 1
+    && /their name/i.test(await page.locator(".hit .why").first().innerText()));
+  check("the query is in the URL", new URL(page.url()).searchParams.get("q") === who.displayName, page.url());
+  await page.locator(`.hit a.row[href='/people/${who.id}']`).click();
+  await page.waitForURL(`${BASE}/people/${who.id}`, { timeout: 20000 });
+  await page.goBack();
+  await page.waitForSelector(".hit", { timeout: 20000 });
+  check("a result opens their page, and back brings the same search up again", (await page.locator("#q").inputValue()) === who.displayName);
+
+  await page.locator("#q").fill("zzzqqq");
+  await page.waitForSelector(".empty", { timeout: 20000 });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/13-find-nothing.png`, fullPage: true });
+  check("nothing found says so in the app's own words", /kith only knows what you have told it/i.test(await page.locator(".empty").innerText()));
 } catch (e) {
   failures++;
   console.log("  CRASH", e?.message ?? e);
   await page.screenshot({ path: `${OUT}/99-crash.png`, fullPage: true }).catch(() => {});
 } finally {
-  /* J. cleanup, by the ids this run made */
+  /* L. cleanup, by the ids this run made */
+  if (placeId) {
+    await q("delete from person_places where place_id = $1", [placeId]);
+    await q("delete from places where id = $1 and user_id = $2", [placeId, user.id]);
+    console.log("cleanup: the test place removed");
+  }
+  if (otherUserId) {
+    await q("delete from users where id = $1", [otherUserId]);  // cascades their person
+    console.log("cleanup: the second test account removed");
+  }
   if (captureId) {
     await q("delete from facts where capture_id = $1", [captureId]);
     await q("delete from interactions where capture_id = $1", [captureId]);

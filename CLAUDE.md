@@ -149,19 +149,78 @@ Built, step 4 of the build order (person detail, read only):
   you see them. Open threads and places hide when empty; Remember first and
   History say so in one line.
 - `src/components/TabBar.tsx` in the Shell on every signed-in screen:
-  Today, People, the mic, Find, You. People and the mic are live; the other
-  three are dimmed and inert (`.nv.soon`) until their steps.
+  Today, People, the mic, Find, You. People, the mic and Find are live;
+  Today and You are dimmed and inert (`.nv.soon`) until their steps.
 - On the confirmation screen a person with a row links to their page
   (`.nm-link`), including people kept from an earlier read.
 - `src/lib/format.ts`: dates and due lines as the people screens say them.
   The model writes channels loosely ("in-person"); `fmtChannel` normalises
   them and says nothing for in person, because the place says it.
 
-Step 4 is deployed and merged. Search is next.
+Step 4 is deployed and merged.
+
+Built, step 5 of the build order (search):
+
+- `GET /api/v1/search?q=&lat=&lng=`: hybrid, and every result says why it
+  matched. Trigram (`word_similarity`, not `similarity`) over names, tags and
+  roles for when you remember the word; cosine over facts and visits for when
+  you only remember the shape of the thing. A name outranks a tag outranks a
+  role outranks something you said about them, so typing a name gets the name.
+  Under two characters it returns an empty list and the hints, never an error.
+  No migration: `pg_trgm`, `vector` and the three indexes it needs already
+  exist.
+- Every threshold was measured, first on the data and then on the deployment
+  with real query embeddings. `word_similarity` scores a real first name or
+  surname at 1.0 while a whole sentence tops out near 0.1 across the roster.
+  Right semantic answers came back at 0.48 to 0.61 and the near-misses at 0.34
+  to 0.44, so `VECTOR_GATE` is 0.40. On top of that `VECTOR_BAND` (0.15) lets a
+  confident hit raise the floor under the weaker ones, because otherwise every
+  work-shaped question drags the same four "works in..." facts along behind the
+  answer. The band is applied before a person is reduced to their best row, so
+  someone whose fact is cut can still come back on their name or their tag.
+- A sentence gets matched word by word against tags and roles as well as whole.
+  Typing "coffee" finds the three people whose role says coffee; so does "the
+  guy who does the coffee", which scores far too low as a whole sentence. Those
+  hits sit below a good memory (0.48 and 0.50) and above the noise. Words are
+  stripped to letters and digits, must be four characters or more, and generic
+  ones are dropped: matching on "works" turns "who works in consulting" into a
+  list of everyone who works anywhere.
+- The query is embedded through the `PROCESSOR` service binding, as the
+  confirm route does. If the processor cannot answer, the route returns the
+  trigram half with `namesOnly: true` and the screen says so in one line.
+  Visibly half a search beats a blank screen; it is never silent.
+- Location adds and never filters. `lat`/`lng` add at most `MAX_LOCATION_BOOST`
+  (0.08) to people you are usually near, enough to reorder near-ties and never
+  enough to overturn a name. The Find screen does not ask for the phone's
+  position yet: with no places yet the prompt would buy nothing.
+- "Try one" under an empty field is built from the user's own rows: their
+  most-used tags first, then the commonest words in the roles they wrote,
+  deduped so one hint never hides inside another. A new account gets none.
+  Nothing is invented, and no person's name is ever offered as an example.
+- `store.search(q, coords?)` in both stores; `SearchHit`, `SearchResults` in
+  `src/lib/store.ts`. The why line comes back formed; the date it happened
+  comes back separately as `at` so the screen says it in the phone's own zone.
+- `src/components/FindScreen.tsx` at `/find`: the field with the gold underline
+  on focus, the query in the URL (so a tapped result comes back to the same
+  search), 250ms settle before it asks, results as the same `PersonRow` the
+  people list draws with the why line under each, and "Nothing yet. Kith only
+  knows what you have told it." A result is `.hit`: the row and its why line
+  inside one hairline, so the reason stays with the person it belongs to.
+- The live check grew section K: the empty, one-character and signed-out cases,
+  a name by trigram, a fact and a visit by cosine (which is what proves the
+  processor binding, since trigram never reads either), a second throwaway
+  account whose person must never come back, and one temporary place to prove
+  the location boost lifts and never filters. Section L removes all of it.
+- Four older checks were asserting state rather than behaviour and had gone red
+  on their own: they assumed a note still waiting for review and a note filed
+  before `captures.filing` existed. Every note now has a real filing record and
+  nothing is waiting, so those checks ask the database what is true and assert
+  against that, or say there is nothing left to test. The re-run poll waits five
+  minutes rather than two, because the queue backs off 30s then 60s before a
+  second attempt and a slow model call was timing the run out.
 
 Not built yet:
 
-- Search (step 5). Find is a placeholder tab until then.
 - The Today and You screens. Placeholder tabs.
 - Marking a thread done; editing, merging or deleting people.
 - PWA manifest and service worker
@@ -182,7 +241,7 @@ Do not skip ahead. Each step is testable on its own.
    This screen decides whether the product feels like magic or homework.
    Built; see above.
 4. Person detail, read only. Built; see above.
-5. Search. The API already works once there are ~30 embedded facts.
+5. Search. Built; see above.
 6. Then, and only then, Google Calendar and Contacts sync.
 
 Jordan should use it on himself for two weeks after step 5 before anything

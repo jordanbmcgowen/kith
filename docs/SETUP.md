@@ -149,8 +149,11 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    first, open threads, visits, the notes behind them, and the places you
    see them. Read only for now; every visit and note opens the note it came
    from.
-5. **Search.** `/api/v1/search` is already written and works once you have
-   twenty or thirty facts embedded.
+5. **Search.** Built. The Find tab searches names, tags and roles by the way
+   they are spelled, and facts and visits by what they mean, and every result
+   says which one caught it. Under an empty field it offers a few words drawn
+   from your own tags and roles. Nothing is ever hidden by where you are
+   standing; being near a place you see someone at only lifts them a little.
 
 **Test it on yourself for two weeks before adding anything else.** If you stop
 using it, no feature will save it.

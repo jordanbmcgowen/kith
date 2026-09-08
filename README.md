@@ -32,7 +32,8 @@ src/
   app/notes/[id]/         the confirmation screen (step 3)
   app/people/             the people list, by circle and tag (step 4)
   app/people/[id]/        the person page, read only (step 4)
-  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, TabBar, Shell
+  app/find/               search, names and memories together (step 5)
+  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TabBar, Shell
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
@@ -42,8 +43,8 @@ prototype/
   index.html              the interactive design reference. open it in a browser.
 ```
 
-The capture, confirmation, people and person screens exist as React. Search
-and the Today screen are still only in `prototype/index.html`, which remains
+The capture, confirmation, people, person and find screens exist as React. The
+Today and You screens are still only in `prototype/index.html`, which remains
 the design reference and carries the demo-data seam described in `CLAUDE.md`.
 
 ## The one idea worth protecting
@@ -92,6 +93,11 @@ npm run dev
   can be wrong about is infuriating.
 - **Raw captures are immutable.** Extraction is derived and re-runnable. A bad
   model day costs you a re-run, not a memory.
+- **Search says why it matched.** Trigram over names, tags and roles for when
+  you remember the word; cosine over facts and visits for when you only
+  remember the shape of the thing. Every result carries the line that explains
+  it, because an answer you can check is worth more than one that is merely
+  right.
 - **Confidence below 0.82 goes to review, and files nothing until you tap.**
   Silent wrong filing is worse than a confirmation tap. A note that would add
   three or more people at once waits too, so a pasted roster lands with

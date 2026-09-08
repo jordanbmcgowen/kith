@@ -247,6 +247,13 @@ button.row:active{background:var(--rule);}
 .why{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--verdigris);line-height:1.7;padding:10px 0 2px;}
 .empty{text-align:center;color:var(--text-3);font-size:13.5px;padding:44px 16px;line-height:1.7;}
 .empty em{font-family:var(--serif);font-style:italic;color:var(--text-2);}
+/* A result is the person's row plus the line saying why. The hairline goes
+   round the pair, so the reason stays with the person it belongs to instead
+   of drifting under the next one. */
+.hit{border-bottom:1px solid var(--rule);}
+.hit:last-child{border-bottom:none;}
+.hit .row{border-bottom:none;padding-bottom:4px;}
+.hit .why{padding:0 0 14px;}
 
 /* ──────────────────────────────── tab bar ─────────────────────────────── */
 .nav{
