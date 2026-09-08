@@ -11,10 +11,10 @@
  * `fetch` or `navigator` until a method is called, and the schema imports are
  * types only.
  */
-import type { ExtractionResult, CaptureFiling, FilingDecisions, Circle } from "@/db/schema";
+import type { ExtractionResult, CaptureFiling, FilingDecisions, Circle, FactKind } from "@/db/schema";
 import type { FilingCounts } from "@/lib/filing";
 
-export type { ExtractionResult, CaptureFiling, FilingDecisions, Circle, FilingCounts };
+export type { ExtractionResult, CaptureFiling, FilingDecisions, Circle, FactKind, FilingCounts };
 
 export type CaptureStatus = "uploaded" | "transcribing" | "extracting" | "needs_review" | "filed" | "failed";
 
@@ -44,6 +44,50 @@ export type PersonLite = {
   tags: string[];
   role: string | null;
   _demo?: true;
+};
+
+/** A person as the people list shows them: the picker's shape plus what the row needs. */
+export type PersonRow = PersonLite & {
+  pronunciation: string | null;
+  lastInteractionAt: string | null;
+  /** 0-100. Orders things quietly; never shown as a judgment. */
+  warmth: number;
+};
+
+/** The people list narrows by circle and by tag. Never by location. */
+export type PeopleFilter = { circle?: Circle | "all"; tag?: string | null };
+
+export type PeopleList = {
+  people: PersonRow[];
+  /** Every tag the user has, most used first, for the filter row. Whole roster, whatever the filter. */
+  tags: string[];
+  /** For the line under the heading. Whole roster, whatever the filter. */
+  counts: { people: number; facts: number; places: number };
+};
+
+/** One person with everything the person page shows. Read only. */
+export type PersonView = {
+  person: PersonRow & {
+    pronouns: string | null;
+    company: string | null;
+    title: string | null;
+    birthday: string | null;
+    /** The cadence that applies to them, in days: their own or the circle default. */
+    cadenceDays: number;
+    cadenceIsDefault: boolean;
+    createdAt: string;
+    archivedAt: string | null;
+  };
+  /** Pinned first, then newest. */
+  facts: { id: string; kind: FactKind; content: string; pinned: boolean; confidence: number; captureId: string | null; createdAt: string }[];
+  /** Open only. Soonest due first, undated last. */
+  threads: { id: string; title: string; dueAt: string | null; createdFromCaptureId: string | null; createdAt: string }[];
+  /** Newest first, each with the place it happened at when known. */
+  interactions: { id: string; occurredAt: string; channel: string; summary: string; captureId: string | null; place: { id: string; name: string } | null }[];
+  /** Where you see them, most often first. */
+  places: { id: string; name: string; weight: number; lastSeenAt: string | null }[];
+  /** Every note that filed something about them, newest first. */
+  notes: { id: string; kind: CaptureSummary["kind"]; status: CaptureStatus; capturedAt: string; placeHint: string | null; excerpt: string }[];
 };
 
 /** An existing person whose name looks like one the model called new. */
@@ -95,6 +139,10 @@ export type Store = {
   rerun(id: string): Promise<void>;
   /** How many notes are waiting for a look, and the oldest one. */
   reviewQueue(): Promise<{ count: number; oldestId: string | null }>;
+  /** The people list, narrowed by circle and tag. */
+  people(filter?: PeopleFilter): Promise<PeopleList>;
+  /** One person with everything the person page shows. 404 becomes an ApiError. */
+  person(id: string): Promise<PersonView>;
 };
 
 export class ApiError extends Error {
@@ -106,12 +154,42 @@ export class ApiError extends Error {
    anything. Every record carries _demo:true so one grep finds any that
    escaped. Nothing outside this block may reference a DEMO_ identifier.
    ══════════════════════════════════════════════════════════════════════════════════════════ */
-const DEMO_PEOPLE: PersonLite[] = [
-  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, circle: "friends", tags: ["Brook Hollow"], role: "Franchisee, three territories. Flies a Cirrus." },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, circle: "friends", tags: [], role: "Wine buyer, Bishop Cellars" },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, circle: "neighbors", tags: ["Lakewood"], role: "Two doors down, the blue house" },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, circle: "work", tags: ["Bright Path"], role: "VP Operations, Bright Path Brands" },
+const DEMO_DAY = 86_400_000;
+const DEMO_AGO = (days: number) => new Date(Date.now() - days * DEMO_DAY).toISOString();
+const DEMO_PEOPLE: PersonRow[] = [
+  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, pronunciation: "MAR-kus ELL-er-ee", circle: "friends", tags: ["Brook Hollow"], role: "Franchisee, three territories. Flies a Cirrus.", lastInteractionAt: DEMO_AGO(8), warmth: 74 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, pronunciation: null, circle: "friends", tags: [], role: "Wine buyer, Bishop Cellars", lastInteractionAt: DEMO_AGO(6), warmth: 88 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, pronunciation: null, circle: "neighbors", tags: ["Lakewood"], role: "Two doors down, the blue house", lastInteractionAt: DEMO_AGO(4), warmth: 92 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, pronunciation: "WIT-field", circle: "work", tags: ["Bright Path"], role: "VP Operations, Bright Path Brands", lastInteractionAt: null, warmth: 50 },
 ];
+
+/** What the person page shows for the first demo person. Everyone else is empty, which is also a state to build for. */
+const DEMO_DETAIL: Record<string, Omit<PersonView, "person">> = {
+  [DEMO_PEOPLE[0].id]: {
+    facts: [
+      { id: "00000000-0000-4000-8000-0000000000f1", kind: "relation", content: "Wife is Dana. Two boys, Cole (9) and Reid (6). Cole is trying out for travel baseball this fall.", pinned: true, confidence: 0.95, captureId: "00000000-0000-4000-8000-00000000c001", createdAt: DEMO_AGO(8) },
+      { id: "00000000-0000-4000-8000-0000000000f2", kind: "sensitive", content: "Texas A&M, class of 2004. Will talk about it. Do not bring up the 2024 season.", pinned: true, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(40) },
+      { id: "00000000-0000-4000-8000-0000000000f3", kind: "context", content: "Bought the Fort Worth territory in 2019, added Weatherford in 2023. Wants a third but is capital-shy.", pinned: false, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(30) },
+      { id: "00000000-0000-4000-8000-0000000000f4", kind: "preference", content: "Drinks bourbon, not scotch. Learned that the hard way in Nashville.", pinned: false, confidence: 0.85, captureId: null, createdAt: DEMO_AGO(60) },
+    ],
+    threads: [
+      { id: "00000000-0000-4000-8000-0000000000t1", title: "Send Marcus the Q4 territory map", dueAt: DEMO_AGO(2), createdFromCaptureId: "00000000-0000-4000-8000-00000000c001", createdAt: DEMO_AGO(8) },
+      { id: "00000000-0000-4000-8000-0000000000t2", title: "Ask how Cole's travel baseball tryout went", dueAt: DEMO_AGO(-4), createdFromCaptureId: null, createdAt: DEMO_AGO(8) },
+    ],
+    interactions: [
+      { id: "00000000-0000-4000-8000-0000000000i1", occurredAt: DEMO_AGO(8), channel: "in_person", summary: "Played nine after the owner council. Frustrated with staffing in Weatherford, thinking about a shared crew model with the Arlington owner.", captureId: "00000000-0000-4000-8000-00000000c001", place: { id: "00000000-0000-4000-8000-0000000000p1", name: "Brook Hollow Golf Club" } },
+      { id: "00000000-0000-4000-8000-0000000000i2", occurredAt: DEMO_AGO(24), channel: "meeting", summary: "Owner council. Mentioned Dana went back to teaching this year and the schedule is easier on him now.", captureId: null, place: { id: "00000000-0000-4000-8000-0000000000p2", name: "HQ2, Irving" } },
+      { id: "00000000-0000-4000-8000-0000000000i3", occurredAt: DEMO_AGO(64), channel: "call", summary: "Called about the pricing pilot. Wants a longer ramp than the other markets. Promised him a territory map.", captureId: null, place: null },
+    ],
+    places: [
+      { id: "00000000-0000-4000-8000-0000000000p1", name: "Brook Hollow Golf Club", weight: 4, lastSeenAt: DEMO_AGO(8) },
+      { id: "00000000-0000-4000-8000-0000000000p2", name: "HQ2, Irving", weight: 2, lastSeenAt: DEMO_AGO(24) },
+    ],
+    notes: [
+      { id: "00000000-0000-4000-8000-00000000c001", kind: "voice", status: "filed", capturedAt: DEMO_AGO(8), placeHint: "Brook Hollow", excerpt: "Just saw Marcus at the club. Priya got into Rice, early decision. Told him I'd send the Cirrus article this week." },
+    ],
+  },
+};
 
 const DEMO_EXTRACTION_1: ExtractionResult = {
   people: [{ matchedPersonId: DEMO_PEOPLE[0].id, name: "Marcus", confidence: 0.96, isNew: false, tags: ["Brook Hollow"] }],
@@ -203,6 +281,24 @@ const demoStore: Store = {
     const waiting = DEMO_CAPTURES.filter((c) => c.status === "needs_review");
     return { count: waiting.length, oldestId: waiting.at(-1)?.id ?? null };
   },
+  async people(filter = {}) {
+    const tag = filter.tag?.toLowerCase();
+    const list = DEMO_PEOPLE.filter((p) =>
+      (!filter.circle || filter.circle === "all" || p.circle === filter.circle)
+      && (!tag || p.tags.some((t) => t.toLowerCase() === tag)));
+    const facts = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.facts.length, 0);
+    const places = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.places.length, 0);
+    return { people: list, tags: [...new Set(DEMO_PEOPLE.flatMap((p) => p.tags))], counts: { people: DEMO_PEOPLE.length, facts, places } };
+  },
+  async person(id) {
+    const p = DEMO_PEOPLE.find((x) => x.id === id);
+    if (!p) throw new ApiError(404, "No one here");
+    const detail = DEMO_DETAIL[id] ?? { facts: [], threads: [], interactions: [], places: [], notes: [] };
+    return {
+      person: { ...p, pronouns: null, company: null, title: null, birthday: null, cadenceDays: 21, cadenceIsDefault: true, createdAt: DEMO_AGO(90), archivedAt: null },
+      ...detail,
+    };
+  },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
 
@@ -283,6 +379,18 @@ const liveStore: Store = {
     // Newest first, so the oldest waiting note is the last one.
     const rows = await api<{ captures: CaptureSummary[] }>("/api/v1/captures?status=needs_review").then((r) => r.captures);
     return { count: rows.length, oldestId: rows.at(-1)?.id ?? null };
+  },
+
+  people(filter = {}) {
+    const qs = new URLSearchParams();
+    if (filter.circle && filter.circle !== "all") qs.set("circle", filter.circle);
+    if (filter.tag) qs.set("tag", filter.tag);
+    const s = qs.toString();
+    return api<PeopleList>(`/api/v1/people${s ? `?${s}` : ""}`);
+  },
+
+  person(id) {
+    return api<PersonView>(`/api/v1/people/${encodeURIComponent(id)}`);
   },
 };
 

@@ -25,6 +25,9 @@ export function warmth(opts: {
   return Math.round(Math.max(0, Math.min(100, base + consistency)));
 }
 
+/** Days between visits, per circle, until the user tunes them. Mirrors the default on users.cadenceDefaults. */
+export const CADENCE_DEFAULTS: Record<string, number> = { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
+
 export function cadenceFor(
   person: { cadenceDays: number | null; circle: string },
   defaults: Record<string, number>,

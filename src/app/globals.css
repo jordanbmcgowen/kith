@@ -107,6 +107,7 @@ button.row:active{background:var(--rule);}
   color:var(--text-3);display:flex;align-items:center;gap:12px;flex-wrap:wrap;
 }
 .meta .live{color:var(--gold);}
+.meta .circ{display:inline-flex;align-items:center;gap:6px;}
 .sq{width:6px;height:6px;background:var(--c,var(--text-3));display:inline-block;flex:0 0 auto;}
 
 /* Warmth: a hairline meter, not a ring. Fills on mount. */
@@ -175,6 +176,10 @@ button.row:active{background:var(--rule);}
 }
 .tabs button[aria-pressed="true"]{color:var(--text);font-weight:600;}
 .tabs button[aria-pressed="true"]::after{transform:scaleX(1);}
+/* Six circle words on a 390px phone: a touch tighter than the prototype's five. */
+.tabs.circle-row{gap:16px;}
+.tabs.circle-row button{font-size:12.5px;}
+.tabs.sub button{font-size:12.5px;padding-top:11px;}
 
 /* ──────────────────────────────── capture ──────────────────────────────── */
 .cap{display:flex;flex-direction:column;gap:18px;padding-top:10px;}
@@ -254,13 +259,16 @@ button.row:active{background:var(--rule);}
 .nv{display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--text-3);transition:color .2s;position:relative;}
 .nv[aria-current="true"]{color:var(--text);}
 .nv[aria-current="true"]::before{content:"";position:absolute;top:-10px;width:14px;height:2px;background:var(--gold);}
+a.nv{text-decoration:none;}
+/* Not built yet. Dimmed and inert; the bar keeps its shape. */
+.nv.soon{opacity:.38;cursor:default;}
 .nl{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;}
 .nmic{width:50px;height:50px;border-radius:50%;background:var(--gold);color:var(--ground);display:grid;place-items:center;margin-bottom:2px;transition:transform .2s cubic-bezier(.2,1.4,.4,1);}
 .nmic:active{transform:scale(.9);}
 
 /* ──────────────────────────────── toast ──────────────────────────────── */
 .toast{
-  position:fixed;left:20px;right:20px;bottom:calc(28px + env(safe-area-inset-bottom,0px));z-index:30;
+  position:fixed;left:20px;right:20px;bottom:calc(94px + env(safe-area-inset-bottom,0px));z-index:30;
   max-width:520px;margin:0 auto;
   background:var(--verdigris);color:#04231C;padding:14px 16px;font-size:13.5px;font-weight:600;
   opacity:0;visibility:hidden;pointer-events:none;
@@ -358,3 +366,34 @@ a.row:active{background:var(--rule);}
 }
 .tg button{color:var(--text-3);font-size:13px;line-height:1;padding:0 1px;}
 .tg button:hover{color:var(--text);}
+
+/* ───────────────────────────── person detail ───────────────────────────── */
+.phead{display:flex;gap:16px;align-items:flex-start;padding:14px 0 20px;}
+.pname{font-family:var(--serif);font-optical-sizing:auto;font-weight:400;font-size:29px;letter-spacing:-.028em;line-height:1.05;}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2);}
+.stat{padding:13px 0;display:flex;flex-direction:column;gap:4px;min-width:0;}
+.stat + .stat{border-left:1px solid var(--rule);padding-left:14px;}
+.sv{font-family:var(--serif);font-size:22px;font-weight:400;font-variant-numeric:tabular-nums;line-height:1;}
+.sv .unit{font-size:13px;color:var(--text-3);}
+.sv.none{font-family:var(--sans);font-size:12.5px;color:var(--text-3);line-height:22px;}
+.sk{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);}
+/* Warmth on the page is the same 2px meter as in a row, a little wider. Never a number, never a ring. */
+.stat .meter{width:100%;max-width:96px;margin:10px 0;}
+
+.fact{display:flex;gap:14px;padding:14px 0;border-bottom:1px solid var(--rule);font-size:13.5px;line-height:1.6;}
+.fact:last-child{border-bottom:none;}
+.fact .i{font-family:var(--mono);font-size:10px;color:var(--gold);flex:0 0 20px;padding-top:3px;}
+
+/* The timeline: a hairline down the left, a square on it per entry. Entries with a note are links. */
+.tl{position:relative;padding-left:20px;}
+.tl::before{content:"";position:absolute;left:3px;top:18px;bottom:14px;width:1px;background:var(--rule);}
+.ev{display:block;padding:14px 0;position:relative;color:inherit;text-decoration:none;transition:background .2s ease;}
+.ev::before{content:"";position:absolute;left:-20px;top:19px;width:7px;height:7px;background:var(--c,var(--text-3));}
+a.ev:hover{background:var(--raise);}
+.ev-when{font-family:var(--mono);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-3);display:flex;gap:14px;align-items:center;flex-wrap:wrap;}
+.ev-text{font-size:13.5px;line-height:1.6;margin-top:6px;}
+.ev-place{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-top:8px;}
+
+/* On the confirmation screen a name that has a page is a link. A hairline under it, nothing louder. */
+.nm-link{text-decoration:underline;text-underline-offset:4px;text-decoration-color:var(--rule-2);}
+.nm-link:hover{text-decoration-color:var(--text-2);}
