@@ -26,10 +26,13 @@ src/
   lib/places.ts           a typed name or coordinates -> a places row
   lib/store.ts            the data seam: one constant picks demo or live
   lib/recorder.ts         MediaRecorder + level meter, browser only
+  lib/format.ts           dates and due lines as the people screens say them
   app/api/v1/*            the API. versioned, so an Expo app can reuse it
   app/record/             the capture screen (step 2 of the build order)
   app/notes/[id]/         the confirmation screen (step 3)
-  components/             CaptureScreen, ConfirmScreen, RecentCaptures, Shell
+  app/people/             the people list, by circle and tag (step 4)
+  app/people/[id]/        the person page, read only (step 4)
+  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, TabBar, Shell
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
@@ -39,8 +42,8 @@ prototype/
   index.html              the interactive design reference. open it in a browser.
 ```
 
-The capture and confirmation screens exist as React. Everything after them
-(person detail, search) is still only in `prototype/index.html`, which remains
+The capture, confirmation, people and person screens exist as React. Search
+and the Today screen are still only in `prototype/index.html`, which remains
 the design reference and carries the demo-data seam described in `CLAUDE.md`.
 
 ## The one idea worth protecting

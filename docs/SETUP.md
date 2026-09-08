@@ -144,7 +144,11 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    app embeds what it writes by asking the processor over the `PROCESSOR`
    service binding, so no model key lives on the app. "Read it again"
    re-runs extraction on a note and stops at needs review.
-4. **Person detail.** Read path only. Facts, timeline, threads.
+4. **Person detail.** Built. The People tab lists everyone, narrowed by
+   circle or by one of your tags. A person's page shows what to remember
+   first, open threads, visits, the notes behind them, and the places you
+   see them. Read only for now; every visit and note opens the note it came
+   from.
 5. **Search.** `/api/v1/search` is already written and works once you have
    twenty or thirty facts embedded.
 

@@ -119,12 +119,51 @@ Built, step 3 of the build order (the confirmation screen):
 
 Step 3 is merged and deployed. Jordan has reviewed his real notes on it.
 
+Built, step 4 of the build order (person detail, read only):
+
+- `GET /api/v1/people/:id`: the person with the cadence that applies to
+  them, facts pinned first, open threads soonest first, visits newest first
+  with their place, places by how often you see them there, and the notes
+  that filed something about them: every capture whose filing record lists
+  them, plus any that left a fact, visit, thread or attached loose thread on
+  them. A note the user left them out of is not a mention. A malformed or
+  foreign id is a 404.
+- `GET /api/v1/people` grew a `tag` filter (case-insensitive) and returns
+  the user's tags, most used first, and roster counts beside the rows, both
+  unfiltered so the filter row holds still. Sorted by last seen, newest
+  first, then never-seen people by name. An unknown circle is a 400.
+- `store.people({ circle, tag })` and `store.person(id)` in both stores;
+  `PersonRow`, `PeopleList`, `PersonView` in `src/lib/store.ts`.
+- `src/components/PeopleScreen.tsx` at `/people`: the prototype's underline
+  filters for circle, all six words (Other included, since that is where
+  most people start), and a second row for tags. Both live in the URL. The
+  list remembers its query in `sessionStorage` (`kith:people`) so the
+  person page's back link returns to the same view. Location never narrows
+  this list; when places exist it will only reorder it.
+- `src/components/PersonScreen.tsx` at `/people/[id]`: initials, name,
+  pronunciation or goes-by, role, circle, tags; since seen ("none yet"
+  without a visit), your cadence, warmth as the 2px meter and never a
+  number; Remember first; Open threads (no checkbox until marking done
+  arrives); History, which is visits only, each opening its note; Notes,
+  every note that filed something about them, each opening the note; Where
+  you see them. Open threads and places hide when empty; Remember first and
+  History say so in one line.
+- `src/components/TabBar.tsx` in the Shell on every signed-in screen:
+  Today, People, the mic, Find, You. People and the mic are live; the other
+  three are dimmed and inert (`.nv.soon`) until their steps.
+- On the confirmation screen a person with a row links to their page
+  (`.nm-link`), including people kept from an earlier read.
+- `src/lib/format.ts`: dates and due lines as the people screens say them.
+  The model writes channels loosely ("in-person"); `fmtChannel` normalises
+  them and says nothing for in person, because the place says it.
+
+Step 4 is deployed and merged. Search is next.
+
 Not built yet:
 
-- Person detail, search, the tab bar. Step 4 is next: the people list with
-  circle and tag filters, the person page (read only), one route
-  `GET /api/v1/people/:id`, the tab bar with People and Record, and person
-  rows on the confirmation screen linking to the person page.
+- Search (step 5). Find is a placeholder tab until then.
+- The Today and You screens. Placeholder tabs.
+- Marking a thread done; editing, merging or deleting people.
 - PWA manifest and service worker
 - Web push
 - Post-meeting prompts from calendar events
@@ -142,7 +181,7 @@ Do not skip ahead. Each step is testable on its own.
 3. The confirmation screen. Render the `extraction` JSON from the capture row.
    This screen decides whether the product feels like magic or homework.
    Built; see above.
-4. Person detail, read only.
+4. Person detail, read only. Built; see above.
 5. Search. The API already works once there are ~30 embedded facts.
 6. Then, and only then, Google Calendar and Contacts sync.
 
@@ -212,7 +251,20 @@ or no.
   token), makes one note, drives the screen, checks the database, and
   deletes exactly what it made. Extend it for each new screen. Delete only
   rows you created, by id or by the `PIPELINE CHECK` marker, never "since
-  the run started".
+  the run started". Labels are uppercased by CSS, so an assertion on
+  `innerText()` compares case-insensitively. `BASE=` points it at another
+  origin.
+- Screens can be checked before a deploy against a local server on the
+  real database, read paths only:
+  `NODE_USE_ENV_PROXY=1 AUTH_SECRET=local AUTH_URL=http://localhost:3100 AUTH_TRUST_HOST=true AUTH_GOOGLE_ID=local AUTH_GOOGLE_SECRET=local npx next dev -p 3100`,
+  then a temporary `sessions` row exactly as the live check makes one (over
+  http the cookie is `authjs.session-token`, no `__Secure-` prefix). A note
+  posted locally has no queue consumer, so only reading works there.
+  Playwright needs `PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK=1`
+  and `proxy: { server: HTTPS_PROXY, bypass: "localhost,127.0.0.1" }`, or
+  Chromium sends localhost through the proxy and gets a 405. Hide Next's
+  dev button before a screenshot with `nextjs-portal{display:none}`. Stop
+  the server by the PID in its own log lines (`(node:PID)`).
 - The model keys live only on kith-processor. The app reaches embeddings
   through the `PROCESSOR` service binding. Do not copy keys to the app.
 - Re-running extraction on a real note is `POST /api/v1/captures/:id/rerun`
