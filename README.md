@@ -103,6 +103,14 @@ npm run dev
   visit, so the way to correct it is to correct the visits. "Saw them" logs one
   on a chosen day; a visit that came from a note is corrected on that note,
   where the correction survives a re-file.
+- **A fact knows what it is about.** Work, the people in their life, travel,
+  and four quieter kinds. The model picks one and labels the row with it; one
+  tap changes it. A person's page is that list broken into blocks, and a block
+  with nothing in it is not drawn.
+- **You can add what the model never heard.** A note is what you said in
+  twenty seconds; the rest arrives while you are looking at the screen. "+
+  note" under each person on the review screen, filed the same way as
+  everything else the note produced.
 - **The only groups are yours.** Kith once had five circles of its own, and
   sixty of sixty-one people landed in "other". They are gone. `people.tags` is
   the grouping: free text, proposed by extraction from your own words and
@@ -122,6 +130,12 @@ npm run dev
   Silent wrong filing is worse than a confirmation tap. A note that would add
   three or more people at once waits too, so a pasted roster lands tagged
   instead of as a pile of strangers.
+- **Anything that writes rows records that it wrote them first.** Filing tells
+  the capture which people it is about to create, generating their ids itself,
+  then creates them in one statement. A write that dies halfway and leaves no
+  trace is how a retry doubles a forty-name roster, which is not theoretical:
+  it happened once, and `scripts/pipeline-check.ts` section 14 is the
+  regression test.
 - **Every query is scoped by `userId`.** `scoped()` in `src/db/index.ts` is there
   to make the tenant filter hard to forget as the route count grows.
 - **No LiveKit.** There is no realtime audio between people here, only one-way

@@ -61,7 +61,7 @@ export function PeopleScreen() {
       <p className="stamp anim" style={style(1, { marginTop: 10 })}>{stamp}</p>
 
       {(data?.tags.length ?? 0) > 0 && (
-        <div className="tabs circle-row anim" style={style(2, { marginTop: 20 })} role="group" aria-label="Narrow by tag">
+        <div className="tabs tag-row anim" style={style(2, { marginTop: 20 })} role="group" aria-label="Narrow by tag">
           <button type="button" aria-pressed={!tag} onClick={() => setTag(null)}>Everyone</button>
           {(data?.tags ?? []).map((t) => (
             <button key={t} type="button" aria-pressed={tag?.toLowerCase() === t.toLowerCase()} onClick={() => setTag(t)}>{t}</button>

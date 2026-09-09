@@ -223,11 +223,33 @@ try {
     await alphaFacts.nth(0).locator(".it-tap").click();
     await page.waitForSelector(".item .ie", { timeout: 10000 });
     await alphaFacts.nth(0).locator(".ie").fill(editedFact);
+    // What a fact is about is a tap too, not just its words: the model files
+    // most work under "context" and that is the wrong drawer.
+    check("the open editor offers what the fact is about", (await alphaFacts.nth(0).locator(".kd").count()) === 8);
+    await alphaFacts.nth(0).locator(".kd", { hasText: /^work$/i }).click();
     await alphaFacts.nth(0).locator(".acts .act", { hasText: "Done" }).click();
     await page.waitForTimeout(200);
     check("the correction replaces the model's words on the screen", (await alphaFacts.nth(0).locator(".it").innerText()).includes(MARK));
     check("and the row says it was edited", (await alphaFacts.nth(0).locator(".edited").count()) === 1);
+    check("the row is relabelled with the kind you picked", /^work$/i.test((await alphaFacts.nth(0).locator(".ik").innerText()).trim()));
   }
+
+  // Add something the model never heard. Editing was only half of it: a note
+  // is what you said in twenty seconds, and the rest arrives while you look
+  // at the screen.
+  const ADDED = "Kith test: taking the family to Banff in March, same lodge as last year.";
+  await blocks.nth(0).locator(".act", { hasText: "+ note" }).click();
+  await page.waitForSelector(".item .ie", { timeout: 10000 });
+  const composer = blocks.nth(0).locator(".item").filter({ has: page.locator(".ie") });
+  await composer.locator(".ie").fill(ADDED);
+  await composer.locator(".kd", { hasText: /^travel$/i }).click();
+  await composer.locator(".acts .act", { hasText: "Add" }).click();
+  await page.waitForTimeout(200);
+  const addedRow = blocks.nth(0).locator(".item").filter({ hasText: "Banff" });
+  check("a typed note joins the person's items", (await addedRow.count()) === 1);
+  check("and carries the kind it was given", /^travel$/i.test((await addedRow.locator(".ik").innerText()).trim()));
+  check("a typed note is removed, not dropped: there is nothing to keep",
+    (await addedRow.locator(".act", { hasText: "Remove" }).count()) === 1);
 
   // move a follow-up's due date. "By Friday" landing on Saturday used to cost
   // you the whole thread; now it costs a tap.
@@ -271,7 +293,10 @@ try {
   // the second person gets the same tag from the suggestions, one tap
   await blocks.nth(1).locator(".act", { hasText: "+ tag" }).click();
   const suggestion = page.locator(".picker .meta .act", { hasText: /kith test board/i });
-  check("the tag just typed is offered to the next person", (await suggestion.count()) === 1);
+  // Without typing anything. The adder shows eight, the user has more than
+  // that, so this only holds while the note's own tags sort to the front.
+  check("the tag just typed is offered to the next person, above the user's older ones",
+    (await suggestion.count()) === 1, await page.locator(".picker .meta .act").allInnerTexts());
   await suggestion.click();
   // remove one tag from the second person, if the model proposed any, so the × path runs
   const bravoTags = blocks.nth(1).locator(".tg");
@@ -304,6 +329,15 @@ try {
   const f = await q("select content, person_id from facts where capture_id = $1", [captureId]);
   check("dropped fact stayed out", !droppedFact || !f.some((r) => r.content === droppedFact), f.map((r) => r.content));
   check("the corrected fact is what filed, once", !editedFact || f.filter((r) => r.content.includes(MARK)).length === 1, f.map((r) => r.content));
+  const kinds = await q("select content, kind, confidence from facts where capture_id = $1", [captureId]);
+  check("the kind you picked is the kind stored", !editedFact || kinds.find((r) => r.content.includes(MARK))?.kind === "work",
+    kinds.map((r) => [r.kind, r.content.slice(0, 30)]));
+  const addedRowDb = kinds.find((r) => r.content === ADDED);
+  check("the note you typed filed, under its kind and at full confidence",
+    addedRowDb?.kind === "travel" && Number(addedRowDb?.confidence) === 1, addedRowDb);
+  check("it landed on the person it was typed under",
+    f.find((r) => r.content === ADDED)?.person_id === ppl.find((r) => r.display_name === x.people[0].name)?.id,
+    [f.find((r) => r.content === ADDED)?.person_id, ppl.map((r) => r.display_name)]);
   if (movedDue) {
     const [t] = await q("select to_char(due_at at time zone 'UTC', 'YYYY-MM-DD') d from threads where created_from_capture_id = $1 and due_at is not null limit 1", [captureId]);
     check("the due date you set is the one stored", t?.d === DUE_DAY, [t?.d, DUE_DAY]);
@@ -374,6 +408,10 @@ try {
   check("person view has every block the page renders", ["facts", "threads", "interactions", "places", "notes"].every((k) => Array.isArray(V[k])) && typeof who.cadenceDays === "number", Object.keys(V));
   check("the note that made them is in their notes", V.notes.some((n) => n.id === captureId), V.notes.map((n) => n.id));
   check("their facts and visits point back at this note", [...V.facts, ...V.interactions].every((x) => x.captureId === captureId));
+  const allFacts = views.flatMap((v) => v.facts);
+  check("the corrected kind and the typed note both came back on the person route",
+    allFacts.some((f) => f.kind === "work" && f.content.includes(MARK)) && allFacts.some((f) => f.kind === "travel" && f.content === ADDED),
+    allFacts.map((f) => [f.kind, f.content.slice(0, 28)]));
   check("no tenant column on the person", !("userId" in who));
   check("a malformed person id is a 404", (await page.request.get(`${BASE}/api/v1/people/not-a-uuid`)).status() === 404);
   check("an unknown person id is a 404", (await page.request.get(`${BASE}/api/v1/people/00000000-0000-4000-8000-00000000dead`)).status() === 404);
@@ -411,7 +449,26 @@ try {
   check("name and tag on the page", (await page.locator(".pname").innerText()).trim() === who.displayName && (await page.locator(".phead .meta").innerText()).toLowerCase().includes(TAG.toLowerCase()));
   check("and no circle beside them", !/family|friends|work|neighbors|other/i.test(await page.locator(".phead .meta").innerText()));
   check("stats: since seen, cadence, and warmth as a meter", (await page.locator(".stat").count()) === 3 && (await page.locator(".stat .meter").count()) === 1);
-  check("Remember first lists every fact", (await page.locator(".fact").count()) === V.facts.length, await page.locator(".fact").count());
+  check("every fact is on the page", (await page.locator(".fact").count()) === V.facts.length, await page.locator(".fact").count());
+  // Facts are grouped by what they are about. Which blocks appear is decided
+  // by this person's own facts, so the assertion reads the data rather than
+  // assuming which of the test people the run ended up driving.
+  const SECTIONS = {
+    "Remember first": ["identity", "sensitive", "preference", "history", "context"],
+    "Work": ["work"], "Family and friends": ["relation"], "Travel": ["travel"],
+  };
+  const want = Object.entries(SECTIONS).filter(([, ks]) => V.facts.some((f) => ks.includes(f.kind))).map(([l]) => l.toLowerCase());
+  // A label carries its count in a span; innerText glues them together.
+  const labels = (await page.locator(".block .label").allInnerTexts()).map((t) => t.replace(/[\s\d]+$/, "").trim().toLowerCase());
+  check("facts are grouped under what they are about", want.every((l) => labels.includes(l)), { want, labels });
+  // One list broken into subjects, so the numbering runs down the page rather
+  // than restarting in every block.
+  const nums = (await page.locator(".fact .i").allInnerTexts()).map((t) => t.trim());
+  check("facts are numbered straight down the page, not per block",
+    nums.join(",") === V.facts.map((_, i) => String(i + 1).padStart(2, "0")).join(","), nums);
+  check("and a group with nothing in it is not drawn",
+    Object.keys(SECTIONS).map((l) => l.toLowerCase()).filter((l) => !want.includes(l)).every((l) => !labels.includes(l)),
+    { want, labels });
   check("open threads render with a due line", (await page.locator(".thread").count()) === V.threads.length && (V.threads.length === 0 || /Due|Overdue|No date/i.test(await page.locator(".thread .tmeta").first().innerText())), await page.locator(".thread").count());
   check("history: one entry per visit, each opening its note", (await page.locator(".tl a.ev").count()) === V.interactions.filter((x) => x.captureId).length && (await page.locator(".tl .ev").count()) === V.interactions.length, await page.locator(".tl .ev").count());
   check("the notes block links to the note", (await page.locator(`a.row[href='/notes/${captureId}']`).count()) === 1);

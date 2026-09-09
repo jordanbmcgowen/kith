@@ -191,9 +191,8 @@ button.row:active{background:var(--rule);}
 .tabs button[aria-pressed="true"]::after{transform:scaleX(1);}
 /* A row of the user's own tags on a 390px phone: tighter than the prototype,
    which only ever had five words to fit. */
-.tabs.circle-row{gap:16px;}
-.tabs.circle-row button{font-size:12.5px;}
-.tabs.sub button{font-size:12.5px;padding-top:11px;}
+.tabs.tag-row{gap:16px;}
+.tabs.tag-row button{font-size:12.5px;}
 
 /* ──────────────────────────────── capture ──────────────────────────────── */
 .cap{display:flex;flex-direction:column;gap:18px;padding-top:10px;}
@@ -376,6 +375,27 @@ a.row:active{background:var(--rule);}
   color:var(--text-2);font-family:var(--mono);font-size:10px;padding:0 0 3px;
 }
 .ie-when input:focus{outline:none;border-bottom-color:var(--gold);}
+/* What a fact is about, while it is open for editing. Words with an underline
+   on the chosen one, the same language as the filter row: the app has no pill
+   chips, and a native select would have been the only one in it. It wraps
+   rather than scrolls, because a choice you cannot see is one you will not
+   make. */
+.kinds{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin-top:12px;}
+.kd{
+  font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--text-3);padding:0 0 3px;position:relative;white-space:nowrap;transition:color .2s ease;
+}
+.kd::after{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--gold);
+  transform:scaleX(0);transform-origin:left;transition:transform .28s cubic-bezier(.2,.9,.25,1);
+}
+.kd:hover{color:var(--text-2);}
+.kd.on{color:var(--text);}
+.kd.on::after{transform:scaleX(1);}
+
+/* Adding something the model never heard. Sits where the next item would. */
+.act.add{display:block;margin:10px 0 2px;padding-top:10px;border-top:1px solid var(--rule);width:100%;text-align:left;}
+
 .item .acts{display:flex;gap:12px;padding-top:3px;}
 .edited{
   margin-left:10px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;

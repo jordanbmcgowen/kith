@@ -9,6 +9,8 @@ import {
 import { defaultDecisions, mergeTags } from "@/lib/decisions";
 import { AUTO_FILE_THRESHOLD } from "@/lib/ai/threshold";
 import { toDateInput, fromDateInput, initials } from "@/lib/format";
+import { FACT_LABELS, FACT_PICKS, DEFAULT_FACT_KIND } from "@/lib/facts";
+import type { FactKind } from "@/db/schema";
 import { BackLink as Back } from "./BackLink";
 import { TagAdder } from "./TagAdder";
 
@@ -82,9 +84,17 @@ export function ConfirmScreen({ id }: { id: string }) {
   }, [view, decisions]);
 
   const rosterById = useMemo(() => new Map((view?.people ?? []).map((p) => [p.id, p])), [view]);
-  /** Every tag in play: the user's, plus any typed on this screen, for the suggestions under "+ tag". */
+  /**
+   * Every tag in play under "+ tag", the ones on this note first.
+   *
+   * The adder shows the first eight of these. The user's own list is longer
+   * than that (fifteen, and growing), so ordering it by their whole roster
+   * buried the tag they had just typed on the person above: the one case the
+   * suggestions exist for, same tag, next person, one tap. What this note is
+   * already about is the better guess, every time.
+   */
   const tagPool = useMemo(
-    () => mergeTags(view?.tags ?? [], (decisions?.people ?? []).flatMap((d) => d.tags ?? [])),
+    () => mergeTags((decisions?.people ?? []).flatMap((d) => d.tags ?? []), view?.tags ?? []),
     [view, decisions],
   );
 
@@ -100,6 +110,14 @@ export function ConfirmScreen({ id }: { id: string }) {
     update((d) => ({ ...d, [key]: d[key].map((it, k) => (k === i ? { ...it, keep: !it.keep } : it)) }));
   const editItem = (key: "facts" | "interactions" | "threads", i: number, patch: Record<string, unknown>) =>
     update((d) => ({ ...d, [key]: d[key].map((it, k) => (k === i ? { ...it, ...patch } : it)) }));
+  /** A fact the user typed. Keyed by the person's name, as the model's are. */
+  const addFact = (personName: string, kind: FactKind, text: string) =>
+    update((d) => ({ ...d, added: [...(d.added ?? []), { personName, kind, text }] }));
+  const editAdded = (i: number, patch: Partial<NonNullable<FilingDecisions["added"]>[number]>) =>
+    update((d) => ({ ...d, added: (d.added ?? []).map((a, k) => (k === i ? { ...a, ...patch } : a)) }));
+  const removeAdded = (i: number) =>
+    update((d) => ({ ...d, added: (d.added ?? []).filter((_, k) => k !== i) }));
+
   const setLoose = (i: number, patch: Partial<FilingDecisions["unresolved"][number]>) =>
     update((d) => ({ ...d, unresolved: d.unresolved.map((u, k) => (k === i ? { ...u, ...patch } : u)) }));
   const setPlace = (place: FilingDecisions["place"]) => update((d) => ({ ...d, place }));
@@ -235,6 +253,9 @@ export function ConfirmScreen({ id }: { id: string }) {
                   onLeaveOut={() => leaveOut(i)}
                   onBringBack={() => bringBack(i, p)}
                   onToggle={toggle}
+                  onAdd={addFact}
+                  onEditAdded={editAdded}
+                  onRemoveAdded={removeAdded}
                   createdId={createdId(p.name)}
                 />
               ))}
@@ -294,7 +315,7 @@ export function ConfirmScreen({ id }: { id: string }) {
 
 /* ───────────────────────────────── people ───────────────────────────────── */
 
-function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, tagPool, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, onEdit, createdId }: {
+function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster, suggestions, tagPool, picker, onPicker, onPerson, onLeaveOut, onBringBack, onToggle, onEdit, onAdd, onEditAdded, onRemoveAdded, createdId }: {
   index: number;
   p: ExtractionResult["people"][number];
   i: number;
@@ -314,6 +335,9 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   onBringBack: () => void;
   onToggle: (key: "facts" | "interactions" | "threads", i: number) => void;
   onEdit: (key: "facts" | "interactions" | "threads", i: number, patch: Record<string, unknown>) => void;
+  onAdd: (personName: string, kind: FactKind, text: string) => void;
+  onEditAdded: (i: number, patch: { kind?: FactKind; text?: string }) => void;
+  onRemoveAdded: (i: number) => void;
   createdId: string | null;
 }) {
   const row = dec.personId ? rosterById.get(dec.personId) : undefined;
@@ -326,8 +350,13 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   const status = statusOf(p, dec);
   const tags = dec.tags ?? [];
   const [adding, setAdding] = useState(false);
+  const [writing, setWriting] = useState(false);
 
   const facts = first ? x.facts.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
+  // Typed facts are keyed by name too, so the first block with a name owns them.
+  const added = first
+    ? (decisions.added ?? []).map((a, k) => [a, k] as const).filter(([a]) => a.personName === p.name)
+    : [];
   const interactions = first ? x.interactions.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
   const threads = first ? x.threads.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
 
@@ -390,19 +419,33 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
         </span>
       </div>
 
-      {(facts.length > 0 || interactions.length > 0 || threads.length > 0) && (
+      {(facts.length > 0 || added.length > 0 || interactions.length > 0 || threads.length > 0 || (!out && first)) && (
         <div className="items">
           {facts.map(([f, k]) => {
             const d = decisions.facts[k];
+            const kind = d.kind ?? f.kind;
             return (
               <ItemRow
-                key={`f${k}`} k={f.kind} text={d.text ?? f.content} edited={!!d.text}
+                key={`f${k}`} k={FACT_LABELS[kind]} kind={kind} text={d.text ?? f.content}
+                edited={!!d.text || (!!d.kind && d.kind !== f.kind)}
                 keep={d.keep} muted={out}
                 onToggle={() => onToggle("facts", k)}
-                onSave={(e) => onEdit("facts", k, { text: e.text === f.content ? undefined : e.text })}
+                onSave={(e) => onEdit("facts", k, {
+                  text: e.text === f.content ? undefined : e.text,
+                  kind: e.kind === f.kind ? undefined : e.kind,
+                })}
               />
             );
           })}
+          {added.map(([a, k]) => (
+            <ItemRow
+              key={`a${k}`} k={FACT_LABELS[a.kind]} kind={a.kind} text={a.text} edited={false}
+              keep muted={out}
+              onToggle={() => onRemoveAdded(k)}
+              onSave={(e) => onEditAdded(k, { text: e.text, kind: e.kind })}
+              onRemove={() => onRemoveAdded(k)}
+            />
+          ))}
           {interactions.map(([it, k]) => {
             const d = decisions.interactions[k];
             const when = d.at ?? it.occurredAt;
@@ -434,6 +477,9 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
               />
             );
           })}
+          {!out && first && (writing
+            ? <AddFact onAdd={(kind, text) => onAdd(p.name, kind, text)} onClose={() => setWriting(false)} />
+            : <button type="button" className="act add" onClick={() => setWriting(true)}>+ note</button>)}
         </div>
       )}
     </div>
@@ -461,8 +507,10 @@ function statusOf(p: ExtractionResult["people"][number], dec: PersonDecision): {
  * Nothing here rewrites the note. Facts, visits and follow-ups are derived
  * from it, so a correction is a re-file; the transcript stands as it was said.
  */
-function ItemRow({ k, text: t, edited, date, dateLabel, clearable, keep, muted, onToggle, onSave }: {
+function ItemRow({ k, kind, text: t, edited, date, dateLabel, clearable, keep, muted, onToggle, onSave, onRemove }: {
   k: string;
+  /** Facts carry one, and it can be changed while editing. Visits and follow-ups do not. */
+  kind?: FactKind;
   text: string;
   edited: boolean;
   /** ISO, for the rows that carry a date. Absent on the rows that do not. */
@@ -473,18 +521,25 @@ function ItemRow({ k, text: t, edited, date, dateLabel, clearable, keep, muted, 
   keep: boolean;
   muted: boolean;
   onToggle: () => void;
-  onSave: (e: { text: string; date?: string | null }) => void;
+  onSave: (e: { text: string; date?: string | null; kind?: FactKind }) => void;
+  /** Set on a fact the user typed: there is nothing to keep, so it is removed outright. */
+  onRemove?: () => void;
 }) {
   const hasDate = date !== undefined;
   const [draft, setDraft] = useState<string | null>(null);
   const [day, setDay] = useState("");
+  const [pick, setPick] = useState<FactKind | undefined>(kind);
   const editing = draft !== null;
 
-  const start = () => { setDraft(t); setDay(toDateInput(date)); };
+  const start = () => { setDraft(t); setDay(toDateInput(date)); setPick(kind); };
   const cancel = () => setDraft(null);
   const commit = () => {
     const next = (draft ?? "").trim();
-    if (next) onSave({ text: next, ...(hasDate ? { date: day ? fromDateInput(day) : null } : {}) });
+    if (next) onSave({
+      text: next,
+      ...(hasDate ? { date: day ? fromDateInput(day) : null } : {}),
+      ...(pick ? { kind: pick } : {}),
+    });
     setDraft(null);
   };
 
@@ -508,10 +563,12 @@ function ItemRow({ k, text: t, edited, date, dateLabel, clearable, keep, muted, 
               {clearable && day && <button type="button" className="act" onClick={() => setDay("")}>No date</button>}
             </label>
           )}
+          {pick !== undefined && <KindPicker value={pick} onPick={setPick} />}
         </span>
         <span className="acts">
           <button className="act gold" onClick={commit} disabled={!(draft ?? "").trim()}>Done</button>
           <button className="act" onClick={cancel}>Cancel</button>
+          {onRemove && <button className="act" onClick={onRemove}>Remove</button>}
         </span>
       </div>
     );
@@ -526,7 +583,59 @@ function ItemRow({ k, text: t, edited, date, dateLabel, clearable, keep, muted, 
           : <button type="button" className="it-tap" onClick={start} aria-label="Change this">{t}</button>}
         {edited && <span className="edited">Edited</span>}
       </span>
-      {!muted && <button className="act" onClick={onToggle}>{keep ? "Drop" : "Undo"}</button>}
+      {!muted && (onRemove
+        ? <button className="act" onClick={onRemove}>Remove</button>
+        : <button className="act" onClick={onToggle}>{keep ? "Drop" : "Undo"}</button>)}
+    </div>
+  );
+}
+
+/**
+ * What a fact is about, as words with an underline on the chosen one. The
+ * app has no pill chips, and a native select would be the only one in it.
+ */
+function KindPicker({ value, onPick }: { value: FactKind; onPick: (k: FactKind) => void }) {
+  return (
+    <span className="kinds" role="radiogroup" aria-label="What this is about">
+      {FACT_PICKS.map((k) => (
+        <button
+          key={k} type="button" role="radio" aria-checked={k === value}
+          className={`kd${k === value ? " on" : ""}`}
+          onClick={() => onPick(k)}
+        >{FACT_LABELS[k]}</button>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Something the model did not hear. The note is the record, so this is not a
+ * way to rewrite it: it is a way to add what you know about the person while
+ * they are in front of you, which is the only moment you will remember to.
+ */
+function AddFact({ onAdd, onClose }: { onAdd: (kind: FactKind, text: string) => void; onClose: () => void }) {
+  const [draft, setDraft] = useState("");
+  const [kind, setKind] = useState<FactKind>(DEFAULT_FACT_KIND);
+  const commit = () => { const next = draft.trim(); if (next) onAdd(kind, next); onClose(); };
+
+  return (
+    <div className="item">
+      <span className="ik">{FACT_LABELS[kind]}</span>
+      <span className="it">
+        <textarea
+          className="ie" value={draft} autoFocus rows={2} placeholder="What do you want to remember?"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onClose();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+          }}
+        />
+        <KindPicker value={kind} onPick={setKind} />
+      </span>
+      <span className="acts">
+        <button className="act gold" onClick={commit} disabled={!draft.trim()}>Add</button>
+        <button className="act" onClick={onClose}>Cancel</button>
+      </span>
     </div>
   );
 }

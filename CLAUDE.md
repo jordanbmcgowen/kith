@@ -34,14 +34,22 @@ The running list of things only he can do. Keep it current: add an item when
 something needs him, strike it when it is done, and say what is on it when he
 asks what is left.
 
-- [ ] **`GOOGLE_PLACES_KEY` on kith-processor.** Turns coordinates alone into a
-      named place, which is what makes "Here" work without typing. Cloud
-      console: enable Places API on the Kith project, make an API key. Then
-      dash.cloudflare.com, Workers & Pages, kith-processor, Settings, Variables
-      and Secrets, add a secret named exactly `GOOGLE_PLACES_KEY`. He does this
-      in a browser; nobody pastes it into a session. Said 2026-09-09 that he
-      would get to it later. Until then, naming a place by hand works and each
-      name makes the next one a tap.
+- [ ] **Enable Places API (New) on the Google Cloud project.** One click:
+      https://console.developers.google.com/apis/api/places.googleapis.com/overview?project=649824471182
+      The key itself is set and working. The trap is that Google ships two
+      separate products with almost the same name, each with its own switch:
+      "Places API" (legacy, closed to new projects) and "Places API (New)".
+      The project has the first one on; the code calls the second
+      (`places.googleapis.com/v1/places:searchNearby`). Tested end to end
+      2026-09-09: Google answered 403 "Places API (New) has not been used in
+      project 649824471182 before or it is disabled". Nothing else is wrong,
+      and nothing on our side needs changing. Until then, naming a place by
+      hand works and each name makes the next one a tap.
+- [ ] **Review the note that half-filed.** The "Soccer people / Green Knoll /
+      Schofield" note (5d3ef4f1) is still waiting. Its 41 people exist with
+      their tags and roles; only "Diane" is left to create. Tapping File it
+      now finishes it without doubling anything. See "A filing that died
+      partway" below for what happened.
 - [ ] **Two weeks of using it.** Not a task, a standing one: what he hits while
       using the app is what decides the next build. Every item in "Built, from
       use" below came from that.
@@ -50,6 +58,8 @@ Done:
 
 - [x] Review the Banner House note (filed 2026-09-09; it is where the Banner
       House, Meridoh and Pizza Hut tags came from).
+- [x] Set `GOOGLE_PLACES_KEY` on kith-processor (done 2026-09-09; the key is
+      valid and reaching Google. See the open item above for what is left).
 
 ## Where things stand
 
@@ -339,6 +349,59 @@ Jordan used the app and two things came back. Both are built.
     old `sessionStorage` entries should not error, they should just show
     everyone.
   - `src/lib/circles.ts` is deleted; `initials` moved to `format.ts`.
+- **What a fact is about: work, travel, and the people in their life.**
+  `facts.kind` was six values the user never saw, three of them catch-alls,
+  and the two subjects that come up in nearly every note had nowhere to land:
+  where someone works went to "history" (which also means alma mater) or
+  "context" (which means everything), and a trip had no home at all. 43 of
+  Jordan's 104 facts were "context".
+  - `work` and `travel` are kinds now, added in `drizzle/0004_fact_kinds.sql`
+    (`ALTER TYPE ... ADD VALUE IF NOT EXISTS`, additive, no row changed).
+    `relation` widened from family to anyone they named, friends included.
+  - `src/lib/facts.ts` holds the whole vocabulary: `FACT_LABELS` (one word
+    per kind, which is what the screen says), `FACT_PICKS` (the chooser, in
+    order), `FACT_SECTIONS` and `bySection`. Nothing else names a kind.
+  - The extraction prompt now defines each kind with an example and says not
+    to use "context" as a default.
+  - The review screen labels every fact row with its kind, and the kind is a
+    tap: open a fact, and the words to change it sit under the text as an
+    underlined row, the same language as the filter row. `FilingDecisions`
+    carries `kind?` per fact; filing writes the user's over the model's, the
+    same way `text` already worked.
+  - A person's page is one list broken into blocks: Remember first, Work,
+    Family and friends, Travel. A block with nothing in it is not drawn, and
+    the numbering runs straight down the page rather than restarting in each
+    block.
+- **Adding, not just correcting.** "+ note" under each person on the review
+  screen. `FilingDecisions.added` is `{ personName, kind, text }[]`, keyed by
+  name exactly as the model's own facts are, so filing resolves it down the
+  same path: it embeds with the rest, it leaves with its person when that
+  person is left out, and a name with no person entry becomes a loose thread
+  instead of vanishing. Confidence 1, because the user wrote it.
+- **The tag you just typed comes first.** The "+ tag" suggestions show eight,
+  and Jordan has fifteen tags, so ordering the pool by his whole roster buried
+  the tag he had just put on the person above: the one case the suggestions
+  exist for. The note's own tags sort to the front now.
+- **A filing that died partway.** Filing inserted people one at a time. A
+  roster note names forty, so that was forty sequential round trips and forty
+  chances for the request to be cancelled: a backgrounded phone, a dropped
+  signal. It happened to a real note (5d3ef4f1, 43 people): 41 rows were
+  created, the request died on the last one, and the record of what it had
+  made was only written after the whole loop. The rows existed, the capture
+  knew nothing about them, and the next File it would have made all 41 again.
+  - The people are made in one statement now. Their ids are generated in the
+    app rather than by the database, which is what lets the capture be told
+    what is about to exist *before* it exists. A row recorded and never
+    inserted is harmless: the next filing does not find it in the roster,
+    makes a fresh one, and drops the stale entry.
+  - `reconstructFiling` cannot heal this case and should not: it refuses to
+    claim people for a note that never wrote a fact, visit or thread, or a
+    waiting note would adopt whoever else was added that half hour. The one
+    affected note was repaired by writing the record its filing would have
+    written, and nothing else.
+  - `scripts/pipeline-check.ts` section 14 is the regression: a filing whose
+    embed throws still leaves the capture knowing every row it made, and the
+    retry reuses them instead of doubling them.
 - **You, rebuilt rather than ported.** The prototype's You was four toggles for
   Google Contacts, Google Calendar, Location and Push. Three of those switch
   things that do not exist, and Location is a browser permission the app does
@@ -409,6 +472,10 @@ saves it.
   Silent wrong filing is worse than a confirmation tap.
 - Anything the model cannot attach to a person becomes a `loose_thread`. Never
   drop something the user said.
+- Anything that writes rows must record that it wrote them before it can fail.
+  Filing tells the capture which people it is about to create, then creates
+  them in one statement. A half-finished write that leaves no trace is how a
+  retry doubles a roster.
 - Location adds to ranking, never filters. Nobody disappears from a list
   because of where Jordan is standing.
 - Secrets go in `wrangler secret put`, never in the repo, never in a client
@@ -424,6 +491,15 @@ saves it.
   `prompt=consent`. Both are already set. Do not remove them.
 - Cloudflare Queues require the Workers Paid plan. The pipeline does not work
   without it.
+- Google ships two products with almost the same name and a separate switch
+  for each: "Places API" (legacy, closed to new projects) and "Places API
+  (New)". `src/lib/places.ts` calls the second
+  (`places.googleapis.com/v1/places:searchNearby`). Enabling the wrong one
+  answers 403 with the key working perfectly. Every failure in that branch is
+  logged now, so `wrangler tail kith-processor` says which of the three
+  reasons it was.
+- Neon's HTTP driver has no interactive transactions, so a route that writes N
+  rows one at a time is N chances to be cancelled halfway. Batch the insert.
 - Whisper mangles unusual names unless you pass the contact list as a prompt
   hint. That is already wired in `transcribe.ts`. Do not remove it.
 - Calendar and Contacts read are **sensitive** scopes: 100-user cap until

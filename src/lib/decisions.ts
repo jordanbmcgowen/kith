@@ -22,6 +22,8 @@ export function defaultDecisions(
     threads: x.threads.map(() => ({ keep: true })),
     unresolved: x.unresolved.map(() => ({ personId: null, dismissed: false })),
     place: { placeId, name: null },
+    // Nothing the model did not say. The review screen fills this in.
+    added: [],
   };
 }
 

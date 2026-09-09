@@ -18,6 +18,7 @@ import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
+  factKindEnum,
   type ExtractionResult, type CaptureFiling, type FilingDecisions,
 } from "../db";
 import { warmth, cadenceFor } from "./warmth";
@@ -44,7 +45,11 @@ export const DecisionsSchema = z.object({
   })),
   // `text` and the dates are the user's corrections. Absent means the model's
   // own words stand.
-  facts: z.array(z.object({ keep: z.boolean(), text: z.string().trim().min(1).max(2000).optional() })),
+  facts: z.array(z.object({
+    keep: z.boolean(),
+    text: z.string().trim().min(1).max(2000).optional(),
+    kind: z.enum(factKindEnum.enumValues).optional(),
+  })),
   interactions: z.array(z.object({
     keep: z.boolean(),
     text: z.string().trim().min(1).max(2000).optional(),
@@ -61,6 +66,13 @@ export const DecisionsSchema = z.object({
     text: z.string().trim().min(1).max(2000).optional(),
   })),
   place: z.object({ placeId: uuid.nullable(), name: z.string().trim().max(120).nullable() }),
+  // Typed on the review screen, so capped at what a thumb writes rather than
+  // what a model returns. Absent in a body written before this existed.
+  added: z.array(z.object({
+    personName: z.string().trim().min(1).max(120),
+    kind: z.enum(factKindEnum.enumValues),
+    text: z.string().trim().min(1).max(2000),
+  })).max(40).optional(),
 });
 
 /** A filing problem the caller can show to the user, with the HTTP status it deserves. */
@@ -197,35 +209,78 @@ export async function fileCapture(o: {
   const created: CaptureFiling["created"] = [];
   const tagChanges = new Map<string, string[]>();
 
+  // Resolve every name first, deciding what already exists and what has to be
+  // made, then make all of it in one statement.
+  //
+  // This used to insert one person at a time. A roster note names forty of
+  // them, so that was forty sequential round trips, and forty chances for the
+  // request to be cancelled halfway: a backgrounded phone, a dropped signal.
+  // When that happened the rows existed and the capture had no record of
+  // them, so the next File it made all forty again.
+  //
+  // The ids are generated here rather than by the database, which is what
+  // lets the capture be told what is about to exist before it exists. A row
+  // recorded and then never inserted is harmless: the next filing does not
+  // find it in the roster, creates a fresh one, and drops the stale entry.
+  const resolved = new Map<number, string>();
+  const toCreate: { index: number; id: string; name: string; tags: string[]; role: string | null }[] = [];
+
   for (const [i, p] of x.people.entries()) {
     const dec = decisions.people[i];
     if (dec.action === "drop") { dropped.add(p.name); continue; }
 
-    let personId: string;
     if (dec.action === "match") {
       if (!dec.personId || !rosterById.has(dec.personId)) {
         throw new FilingError(400, `"${p.name}" was matched to someone who is not in your people`);
       }
-      personId = dec.personId;
-    } else {
-      const prior = previous.created.find((c) =>
-        rosterById.has(c.personId) && !used.has(c.personId) && (c.personId === dec.personId || key(c.name) === key(p.name)));
-      if (prior) {
-        personId = prior.personId;
-      } else {
-        const [row] = await d.insert(people).values({
-          userId,
-          displayName: p.name,
-          tags: normalizeTags(dec.tags ?? p.tags ?? []),
-          role: p.role ?? null,
-        }).returning({ id: people.id, displayName: people.displayName, tags: people.tags, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
-        personId = row.id;
-        rosterById.set(row.id, row);
-      }
+      resolved.set(i, dec.personId);
+      used.add(dec.personId);
+      continue;
     }
 
+    const prior = previous.created.find((c) =>
+      rosterById.has(c.personId) && !used.has(c.personId) && (c.personId === dec.personId || key(c.name) === key(p.name)));
+    if (prior) {
+      resolved.set(i, prior.personId);
+      used.add(prior.personId);
+      continue;
+    }
+
+    const id = crypto.randomUUID();
+    toCreate.push({ index: i, id, name: p.name, tags: normalizeTags(dec.tags ?? p.tags ?? []), role: p.role ?? null });
+    resolved.set(i, id);
+    used.add(id);
+  }
+
+  // Tell the capture what is about to exist, before it does. Everything after
+  // this point is recoverable: a retry reuses these rows instead of doubling
+  // them, whatever happens in between.
+  const interimCreated = x.people
+    .map((p, i) => [p, i] as const)
+    .filter(([, i]) => toCreate.some((t) => t.index === i))
+    .map(([p, i]) => ({ name: p.name, personId: resolved.get(i)! }));
+  if (interimCreated.length) {
+    await d.update(captures).set({
+      filing: {
+        ...previous,
+        created: [...previous.created.filter((c) => !interimCreated.some((n) => n.personId === c.personId)), ...interimCreated],
+      },
+    }).where(eq(captures.id, captureId));
+  }
+
+  if (toCreate.length) {
+    const rows = await d.insert(people).values(toCreate.map((t) => ({
+      id: t.id, userId, displayName: t.name, tags: t.tags, role: t.role,
+    }))).returning({ id: people.id, displayName: people.displayName, tags: people.tags, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
+    for (const row of rows) rosterById.set(row.id, row);
+  }
+
+  // Nothing below can fail on its own: every id is known and every row exists.
+  for (const [i, p] of x.people.entries()) {
+    const dec = decisions.people[i];
+    if (dec.action === "drop") continue;
+    const personId = resolved.get(i)!;
     if (!nameToId.has(p.name)) nameToId.set(p.name, personId);
-    used.add(personId);
     if (dec.action === "new" || previous.created.some((c) => c.personId === personId)) {
       if (!created.some((c) => c.personId === personId)) created.push({ name: p.name, personId });
     }
@@ -235,8 +290,6 @@ export async function fileCapture(o: {
     }
   }
 
-  // Record the rows created so far before anything that can fail. A crash
-  // between here and the end must not create them a second time on retry.
   const interim: CaptureFiling = {
     ...previous,
     created: [...previous.created.filter((c) => !created.some((n) => n.personId === c.personId)), ...created],
@@ -283,11 +336,26 @@ export async function fileCapture(o: {
     const content = dec.text?.trim() || f.content;
     const personId = resolve(f.personName, content);
     if (!personId) return;
+    const kind = dec.kind ?? f.kind;
     factRows.push({
-      userId, personId, kind: f.kind, content, confidence: f.confidence, captureId,
-      pinned: PINNED_KINDS.has(f.kind), embedding: null,
+      userId, personId, kind, content, confidence: f.confidence, captureId,
+      pinned: PINNED_KINDS.has(kind), embedding: null,
     });
   });
+
+  // Something the user typed that the model never heard. Same path as the
+  // model's own facts, so it is resolved by name, embedded with them, and
+  // left out when its person is. Confidence 1: they wrote it themselves.
+  for (const a of decisions.added ?? []) {
+    const content = a.text.trim();
+    if (!content) continue;
+    const personId = resolve(a.personName, content);
+    if (!personId) continue;
+    factRows.push({
+      userId, personId, kind: a.kind, content, confidence: 1, captureId,
+      pinned: PINNED_KINDS.has(a.kind), embedding: null,
+    });
+  }
 
   // A loose thread the user attached becomes a fact on that person. The loose
   // row stays, marked resolved, so the note still reads the way it was said.

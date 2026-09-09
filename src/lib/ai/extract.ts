@@ -22,7 +22,7 @@ export const ExtractionSchema = z.object({
   })),
   facts: z.array(z.object({
     personName: z.string(),
-    kind: z.enum(["identity", "relation", "preference", "history", "sensitive", "context"]),
+    kind: z.enum(["identity", "relation", "preference", "history", "sensitive", "context", "work", "travel"]),
     content: z.string(),
     confidence: z.number().min(0).max(1),
     supersedesFactId: z.string().optional(),
@@ -66,13 +66,21 @@ const SYSTEM = `You turn a person's spoken notes about their own life into struc
 
 Rules:
 - Only match a person to an id from CANDIDATES. Never invent an id. If the person is not in the list, set matchedPersonId to null and isNew to true.
-- A person entry is for someone the speaker dealt with directly in this note, or is describing on their own terms so they can be remembered later. Someone who only comes up while talking about somebody else, such as a spouse, a child, a sibling, a boss or a friend of theirs, is not a person entry. Keep them as a fact on the person they belong to, in the speaker's words ("Daughter Priya, got into Rice early decision"), kind "relation" for family and "context" otherwise. Make them their own entry only if the speaker actually talked with them or clearly wants to track them on their own.
+- A person entry is for someone the speaker dealt with directly in this note, or is describing on their own terms so they can be remembered later. Someone who only comes up while talking about somebody else, such as a spouse, a child, a sibling, a boss or a friend of theirs, is not a person entry. Keep them as a fact on the person they belong to, in the speaker's words ("Daughter Priya, got into Rice early decision"), kind "relation": that covers a spouse, a partner, a child, a sibling, a parent, and any friend or colleague of theirs the speaker named. Make them their own entry only if the speaker actually talked with them or clearly wants to track them on their own.
 - A bare name on a list is still a person entry, even with nothing else said about them: the speaker wrote it down to remember them. Give every listed name its own entry, once each. Never move a listed name into unresolved.
 - tags name the group, team, organization, employer or setting a person belongs to, in one or two words: "YoungLife", "Journeymen", "Brook Hollow", "Neighborly board", "Yum Brands". Where the note says who someone works for, tag them with the company's name too. That is how the speaker later asks who they know there, and it is why one person may carry two employers at once. Use the note's own headings and phrasing. Reuse a tag from TAGS or from a candidate's tags when it means the same thing; do not invent a second spelling. Only tag what the note supports, at most three per person. A description ("tall bald guy") or a fact is not a tag.
 - confidence means two different things. For a matched person it is how sure you are that this is the candidate whose id you gave. For a new person it is how sure you are that this is a distinct person who is not already in CANDIDATES under another spelling, a nickname, a first name only, or a description. Knowing little about a new person is not a reason to lower it; a name close to a candidate's is.
 - Prefer candidates marked nearHere when a name is ambiguous, but say so in confidence rather than guessing high.
-- A fact is something durable and true about the person: family, preferences, history, situation. "He seemed tired" is not a fact. "His mother is ill" is.
-- Kind "sensitive" is for things to handle with care: health, grief, subjects to avoid. Mark them so, do not omit them.
+- A fact is something durable and true about the person: family, work, travel, preferences, history, situation. "He seemed tired" is not a fact. "His mother is ill" is.
+- Choose the kind carefully. It is what the speaker sees and how their notes are filed, and three of these come up in almost every note:
+  - "work": where they work now and what they do there, a move between companies, a promotion, what they are building. Present tense. Where they used to work is "history".
+  - "relation": a person of theirs, named or described. Spouse, partner, kids, siblings, parents, and friends or colleagues they mentioned by name. One fact per person of theirs, in the speaker's words.
+  - "travel": a trip taken or planned, somewhere they are going, somewhere they just came back from. Where they live is not travel; that is "identity".
+  - "identity": how to say their name, what they go by, where they are from, how the speaker knows them.
+  - "preference": what they like and do not like.
+  - "history": what they did before. Alma mater, an old job, where they grew up.
+  - "sensitive": things to handle with care. Health, grief, money trouble, subjects to avoid. Mark them so, do not omit them.
+  - "context": only what none of the above covers. Do not use it as a default.
 - A thread is something the speaker owes or promised. Only create one if they actually committed. "I should probably call him" is a thread. "He should call me" is not.
 - Resolve relative dates ("Tuesday", "end of the month") against NOW, in the user's timezone, and return ISO 8601. Look weekdays up in CALENDAR rather than computing them; "Friday" means the next Friday listed there.
 - If the note answers or completes an item in OPEN_THREADS, put that thread's id in closesThreadIds.
@@ -217,7 +225,7 @@ const TOOL_SCHEMA = {
         required: ["personName", "kind", "content", "confidence"],
         properties: {
           personName: { type: "string" },
-          kind: { type: "string", enum: ["identity", "relation", "preference", "history", "sensitive", "context"] },
+          kind: { type: "string", enum: ["identity", "relation", "preference", "history", "sensitive", "context", "work", "travel"] },
           content: { type: "string" },
           confidence: { type: "number" },
           supersedesFactId: { type: "string" },

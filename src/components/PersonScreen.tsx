@@ -8,6 +8,7 @@ import { BackLink } from "./BackLink";
 import { PEOPLE_VIEW_KEY } from "./PeopleScreen";
 import { sayOf } from "./PersonRow";
 import { TagAdder } from "./TagAdder";
+import { bySection } from "@/lib/facts";
 
 const style = (i: number, extra?: CSSProperties) => ({ "--i": Math.min(i, 14), ...extra }) as CSSProperties;
 const text = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -72,6 +73,14 @@ export function PersonScreen({ id }: { id: string }) {
   const days = daysSince(p.lastInteractionAt);
   const history = visits(view);
   let n = 3;
+  // The blocks below are one list broken into subjects, so the numbering runs
+  // straight down the page. Restarting at 01 in every block reads as a bug.
+  let counted = 0;
+  const sections = bySection(facts).map((s) => {
+    const from = counted;
+    counted += s.facts.length;
+    return { ...s, from };
+  });
 
   return (
     <>
@@ -117,18 +126,30 @@ export function PersonScreen({ id }: { id: string }) {
         </div>
       </div>
 
-      <section className="block">
-        <div className="label">Remember first{facts.length > 0 && <span className="n">{facts.length}</span>}</div>
-        {facts.length === 0 && <p className="lede" style={{ padding: "12px 0" }}>Nothing yet. Say something about them after you next see them.</p>}
-        <div className="list">
-          {facts.map((f, i) => (
-            <div key={f.id} className="fact anim" style={style(n++)}>
-              <span className="i">{pad(i + 1)}</span>
-              <span>{f.content}</span>
-            </div>
-          ))}
-        </div>
-      </section>
+      {facts.length === 0 && (
+        <section className="block">
+          <div className="label">Remember first</div>
+          <p className="lede" style={{ padding: "12px 0" }}>Nothing yet. Say something about them after you next see them.</p>
+        </section>
+      )}
+
+      {/* One block per subject, and a block with nothing in it is not drawn,
+          the same as everywhere else here. Work, family and travel are what
+          notes are usually about, so they read as their own thing instead of
+          sitting in one undifferentiated list. */}
+      {sections.map((section) => (
+        <section className="block" key={section.label}>
+          <div className="label">{section.label}<span className="n">{section.facts.length}</span></div>
+          <div className="list">
+            {section.facts.map((f, i) => (
+              <div key={f.id} className="fact anim" style={style(n++)}>
+                <span className="i">{pad(section.from + i + 1)}</span>
+                <span>{f.content}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
 
       {threads.length > 0 && (
         <section className="block">

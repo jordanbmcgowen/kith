@@ -256,7 +256,8 @@ const DEMO_DETAIL: Record<string, Omit<PersonView, "person">> = {
     facts: [
       { id: "00000000-0000-4000-8000-0000000000f1", kind: "relation", content: "Wife is Dana. Two boys, Cole (9) and Reid (6). Cole is trying out for travel baseball this fall.", pinned: true, confidence: 0.95, captureId: "00000000-0000-4000-8000-00000000c001", createdAt: DEMO_AGO(8) },
       { id: "00000000-0000-4000-8000-0000000000f2", kind: "sensitive", content: "Texas A&M, class of 2004. Will talk about it. Do not bring up the 2024 season.", pinned: true, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(40) },
-      { id: "00000000-0000-4000-8000-0000000000f3", kind: "context", content: "Bought the Fort Worth territory in 2019, added Weatherford in 2023. Wants a third but is capital-shy.", pinned: false, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(30) },
+      { id: "00000000-0000-4000-8000-0000000000f3", kind: "work", content: "Bought the Fort Worth territory in 2019, added Weatherford in 2023. Wants a third but is capital-shy.", pinned: false, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(30) },
+      { id: "00000000-0000-4000-8000-0000000000f5", kind: "travel", content: "Taking the boys to Colorado over spring break. Same house in Frisco every year.", pinned: false, confidence: 0.9, captureId: null, createdAt: DEMO_AGO(12) },
       { id: "00000000-0000-4000-8000-0000000000f4", kind: "preference", content: "Drinks bourbon, not scotch. Learned that the hard way in Nashville.", pinned: false, confidence: 0.85, captureId: null, createdAt: DEMO_AGO(60) },
     ],
     threads: [
@@ -282,7 +283,7 @@ const DEMO_EXTRACTION_1: ExtractionResult = {
   people: [{ matchedPersonId: DEMO_PEOPLE[0].id, name: "Marcus", confidence: 0.96, isNew: false, tags: ["Brook Hollow"] }],
   facts: [
     { personName: "Marcus", kind: "relation", content: "Daughter Priya got into Rice, early decision", confidence: 0.95 },
-    { personName: "Marcus", kind: "context", content: "Ready to move on a third territory, wants to talk financing this month", confidence: 0.9 },
+    { personName: "Marcus", kind: "work", content: "Ready to move on a third territory, wants to talk financing this month", confidence: 0.9 },
   ],
   interactions: [{ personName: "Marcus", summary: "Ran into him at the club, talked about Priya and the third territory", occurredAt: new Date(Date.now() - 40 * 60_000).toISOString(), channel: "in_person" }],
   threads: [{ personName: "Marcus", title: "Send the Cirrus article", dueAt: new Date(Date.now() + 5 * 86_400_000).toISOString() }],
@@ -355,7 +356,7 @@ const demoStore: Store = {
     capture.status = "filed";
     capture.filing = { filedAt: new Date().toISOString(), by: "user", created: [], peopleIds: [], placeId: null, decisions };
     const x = capture.extraction!;
-    return { counts: { people: decisions.people.filter((p) => p.action !== "drop").length, facts: decisions.facts.filter((f) => f.keep).length, interactions: x.interactions.length, threads: decisions.threads.filter((t) => t.keep).length, loose: x.unresolved.length, closed: 0 } };
+    return { counts: { people: decisions.people.filter((p) => p.action !== "drop").length, facts: decisions.facts.filter((f) => f.keep).length + (decisions.added?.length ?? 0), interactions: x.interactions.length, threads: decisions.threads.filter((t) => t.keep).length, loose: x.unresolved.length, closed: 0 } };
   },
   async rerun(id) {
     const capture = DEMO_CAPTURES.find((c) => c.id === id);

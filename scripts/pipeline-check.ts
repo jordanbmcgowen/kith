@@ -270,9 +270,17 @@ async function main() {
     const decisions9: FilingDecisions = {
       ...defaultDecisions(extraction9, club.id),
       people: [{ action: "new", personId: null, tags: [`${MARK} Work Group`, ` ${MARK} work group `] }],
-      facts: [{ keep: true }, { keep: false }],
+      // The first fact is re-filed under a different heading than the model
+      // chose; the second is dropped.
+      facts: [{ keep: true, kind: "work" }, { keep: false }],
       unresolved: [{ personId: marcus.id, dismissed: false }, { personId: null, dismissed: true }],
       place: { placeId: null, name: null },
+      // Typed on the review screen. The second names nobody in the note, so
+      // it must become a loose thread rather than disappear.
+      added: [
+        { personName: DEV2, kind: "travel", text: "Banff in March, same lodge as last year" },
+        { personName: "Nobody In This Note", kind: "work", text: `${MARK} added for a name the model never listed` },
+      ],
     };
     await fileCapture({ userId, captureId: c9.id, decisions: decisions9, by: "user", embed });
     const [dev2] = await peopleNamed(userId, DEV2);
@@ -282,10 +290,17 @@ async function main() {
     check("new person created with the typed tags, one spelling", dev2?.tags?.filter((t) => /work group/i.test(t)).length === 1, dev2?.tags);
     check("typed tags: trimmed, one spelling, no duplicate", JSON.stringify(dev2?.tags) === JSON.stringify([`${MARK} Work Group`]), dev2?.tags);
     check("dropped fact stayed out; attached loose thread became a fact on Marcus",
-      f9.length === 2 && f9.some((x) => x.personId === dev2?.id && x.content === "Keep this one") && f9.some((x) => x.personId === marcus.id && x.kind === "context" && x.content.includes("loose a")),
+      f9.length === 3 && f9.some((x) => x.personId === dev2?.id && x.content === "Keep this one") && f9.some((x) => x.personId === marcus.id && x.kind === "context" && x.content.includes("loose a")),
       f9.map((x) => [x.content, x.personId === marcus.id ? "marcus" : "dev2"]));
-    check("loose rows: one resolved to Marcus, one dismissed",
-      loose9.length === 2 && loose9.some((l) => l.resolvedPersonId === marcus.id) && loose9.some((l) => l.dismissedAt != null), loose9);
+    check("the kind the user picked replaced the model's",
+      f9.find((x) => x.content === "Keep this one")?.kind === "work",
+      f9.find((x) => x.content === "Keep this one")?.kind);
+    const typed = f9.find((x) => x.content.startsWith("Banff"));
+    check("a fact typed on the review screen is filed, with its kind and full confidence",
+      typed?.personId === dev2?.id && typed?.kind === "travel" && typed?.confidence === 1, typed);
+    check("loose rows: one resolved to Marcus, one dismissed, one from a typed fact naming nobody",
+      loose9.length === 3 && loose9.some((l) => l.resolvedPersonId === marcus.id) && loose9.some((l) => l.dismissedAt != null)
+        && loose9.some((l) => l.content.includes("Nobody In This Note")), loose9);
     const ix9 = await interactionsOf(c9.id);
     check("place cleared: capture and interaction carry none", after9b?.placeId == null && ix9.length === 1 && ix9[0].placeId == null, [after9b?.placeId, ix9[0]?.placeId]);
     check("decisions stored with the created person's id", after9b?.filing?.decisions?.people[0].personId === dev2?.id && after9b?.filing?.created[0]?.personId === dev2?.id, after9b?.filing);
@@ -296,7 +311,8 @@ async function main() {
     await fileCapture({ userId, captureId: c9.id, decisions: { ...after9b!.filing!.decisions!, people: [{ action: "drop", personId: dev2.id }] }, by: "user", embed });
     check("person row this note created is gone", (await peopleNamed(userId, DEV2)).length === 0);
     const f9b = await factsOf(c9.id);
-    check("only the attached fact on Marcus remains; the interaction is gone", f9b.length === 1 && f9b[0].personId === marcus.id && (await interactionsOf(c9.id)).length === 0, f9b.length);
+    check("only the attached fact on Marcus remains; the typed fact went with its person",
+      f9b.length === 1 && f9b[0].personId === marcus.id && (await interactionsOf(c9.id)).length === 0, f9b.length);
 
     console.log("   ...then brought back as new, twice");
     const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, tags: [] }] };
@@ -305,7 +321,14 @@ async function main() {
     const dev2s = await peopleNamed(userId, DEV2);
     check("exactly one row again", dev2s.length === 1, dev2s.length);
     check("an empty tag list on the screen clears the tags", dev2s[0]?.tags.length === 0, dev2s[0]?.tags);
-    check("2 facts, 1 interaction, 2 loose, no duplicates", (await factsOf(c9.id)).length === 2 && (await interactionsOf(c9.id)).length === 1 && (await looseOf(c9.id)).length === 2);
+    // 3 facts: the one kept, the one typed, and the loose thread attached to
+    // Marcus. 3 loose: attached, dismissed, and the typed one naming nobody.
+    const f9c = await factsOf(c9.id);
+    check("3 facts, 1 interaction, 3 loose, no duplicates",
+      f9c.length === 3 && (await interactionsOf(c9.id)).length === 1 && (await looseOf(c9.id)).length === 3,
+      f9c.map((x) => [x.kind, x.content.slice(0, 24)]));
+    check("the typed fact came back with its kind, not the default",
+      f9c.find((x) => x.content.startsWith("Banff"))?.kind === "travel", f9c.map((x) => x.kind));
 
     /* ---- 10. a re-run asks for a look, and keeps what was filed until it gets one ---- */
     console.log("\n10. re-run with review: true on a note that filed itself");
@@ -386,6 +409,41 @@ async function main() {
     const oldAfter = await db().query.people.findFirst({ where: eq(people.id, old.id) });
     check("last seen is the meeting's date", !!oldAfter?.lastInteractionAt && Math.abs(oldAfter.lastInteractionAt.getTime() - then.getTime()) < 60_000, oldAfter?.lastInteractionAt);
     check("warmth reflects 200 days of silence against their own 21 days", (oldAfter?.warmth ?? 100) < 20, oldAfter?.warmth);
+
+    /* ---- 14. a filing that dies after the people are made ---- */
+    // What happened to a real roster note: forty-three people, inserted one
+    // at a time, and the request was cancelled partway. The rows existed and
+    // the capture had no record of them, so the next File it made them again.
+    console.log("\n14. a filing that dies partway does not double the people on retry");
+    const ROSTER = [1, 2, 3, 4, 5].map((i) => `${MARK} Crash ${i}`);
+    const [c14] = await db().insert(captures).values({
+      userId, kind: "text", status: "needs_review", rawText: `${MARK} a list of names`, capturedAt: new Date(),
+    }).returning();
+    const extraction14: Extraction = {
+      ...empty,
+      people: ROSTER.map((n) => ({ matchedPersonId: null, name: n, confidence: 0.6, isNew: true })),
+      facts: ROSTER.map((n) => ({ personName: n, kind: "work" as const, content: `${MARK} on the list`, confidence: 0.9 })),
+    };
+    await db().update(captures).set({ extraction: extraction14 }).where(eq(captures.id, c14.id));
+    const boom = async () => { throw new Error("pipeline check: embedding died"); };
+    let threw = false;
+    try {
+      await fileCapture({ userId, captureId: c14.id, decisions: defaultDecisions(extraction14, null), by: "user", embed: boom });
+    } catch { threw = true; }
+    check("the filing failed, as arranged", threw);
+    const made14 = await db().select({ id: people.id }).from(people)
+      .where(and(eq(people.userId, userId), inArray(people.displayName, ROSTER)));
+    const rec14 = await captureRow(c14.id);
+    check("the people it made exist", made14.length === ROSTER.length, made14.length);
+    check("and the note knows it made them, even though it never finished",
+      (rec14?.filing?.created ?? []).length === ROSTER.length, rec14?.filing?.created?.length);
+    check("nothing else was written", (await factsOf(c14.id)).length === 0 && rec14?.status === "needs_review", rec14?.status);
+
+    await fileCapture({ userId, captureId: c14.id, decisions: defaultDecisions(extraction14, null), by: "user", embed });
+    const again14 = await db().select({ id: people.id }).from(people)
+      .where(and(eq(people.userId, userId), inArray(people.displayName, ROSTER)));
+    check("the retry reused every row instead of doubling it", again14.length === ROSTER.length, again14.length);
+    check("and this time it filed", (await captureRow(c14.id))?.status === "filed" && (await factsOf(c14.id)).length === ROSTER.length);
 
     /* ---- 6. a typed place name finds an existing place, fuzzily ---- */
     console.log("\n6. typed place, lowercase and partial, matches the known club");

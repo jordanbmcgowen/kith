@@ -47,12 +47,16 @@ export const captureStatusEnum = pgEnum("capture_status", [
 
 export const factKindEnum = pgEnum("fact_kind", [
   "identity",     // pronunciation, goes-by, how we met
-  "relation",     // spouse, kids, siblings
+  "relation",     // spouse, kids, siblings, and anyone else they named
   "preference",   // drinks bourbon not scotch
-  "history",      // alma mater, career
+  "history",      // alma mater, where they used to work
   "sensitive",    // allergies, things not to bring up
-  "context",      // current situation, what they're working on
+  "context",      // anything none of the others covers
+  "work",         // where they work now and what they do there
+  "travel",       // a trip taken or planned
 ]);
+// work and travel were added in drizzle/0004_fact_kinds.sql. See src/lib/facts.ts
+// for what each kind is called on screen and which block it lands in.
 export type FactKind = (typeof factKindEnum.enumValues)[number];
 
 export const threadStatusEnum = pgEnum("thread_status", [
@@ -388,7 +392,7 @@ export type ExtractionResult = {
   }[];
   facts: {
     personName: string;
-    kind: "identity" | "relation" | "preference" | "history" | "sensitive" | "context";
+    kind: FactKind;
     content: string;
     confidence: number;
     supersedesFactId?: string;
@@ -420,7 +424,7 @@ export type FilingDecisions = {
    * word was the wrong and only choice. The transcript is never touched:
    * facts are derived, so correcting one is a re-file, not a rewrite.
    */
-  facts: { keep: boolean; text?: string }[];
+  facts: { keep: boolean; text?: string; kind?: FactKind }[];
   /** `at` corrects when it happened, which is what warmth and last seen read. */
   interactions: { keep: boolean; text?: string; at?: string }[];
   /** `dueAt` absent keeps the model's date; null clears it. */
@@ -429,6 +433,16 @@ export type FilingDecisions = {
   unresolved: { personId: string | null; dismissed: boolean; text?: string }[];
   /** Keep a known place by id, resolve a typed name, or neither to clear it. */
   place: { placeId: string | null; name: string | null };
+  /**
+   * Facts the user typed on the review screen that the model never proposed.
+   * Keyed by the person's name in the extraction, exactly as the model's own
+   * facts are, so filing resolves them down the same path: a note left out of
+   * the filing takes its added facts with it, and a name with no person entry
+   * becomes a loose thread rather than vanishing.
+   *
+   * Optional so a body written before this existed still validates.
+   */
+  added?: { personName: string; kind: FactKind; text: string }[];
 };
 
 /** What a filing did. Stored on the capture so the next filing can undo and redo it. */

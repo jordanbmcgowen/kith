@@ -8,6 +8,18 @@ import { db, places } from "../db";
 import { bbox, haversineM } from "./geo";
 
 /**
+ * How far Google may look for a name. 90m is a building, not a block: a note
+ * taken in someone's kitchen should not come back named after the restaurant
+ * across the street. Widening this is how the place list fills with places
+ * the user was never in.
+ */
+const PLACES_RADIUS_M = 90;
+
+type GoogleNearby = {
+  places?: { id: string; displayName?: { text?: string }; location?: { latitude?: number; longitude?: number } }[];
+};
+
+/**
  * The user typed where this happened. Match it to a place they already have,
  * case-insensitively and then by trigram similarity so "Brook Hollow" finds
  * "Brook Hollow Golf Club", or create it. If they typed a name while standing
@@ -70,22 +82,44 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
   }
 
   if (!googleKey) return null;
-  const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": googleKey,
-      "X-Goog-FieldMask": "places.id,places.displayName,places.location",
-    },
-    body: JSON.stringify({
-      maxResultCount: 1,
-      locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 90 } },
-    }),
-  });
-  if (!res.ok) return null;
-  const json = (await res.json()) as any;
+
+  // Every failure below says so in the log. A place that silently does not
+  // appear is indistinguishable from a key that was never set, an API that
+  // was never enabled, and a spot Google has no name for. Those want three
+  // different fixes, so they must not look the same in `wrangler tail`.
+  let res: Response;
+  try {
+    res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": googleKey,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.location",
+      },
+      body: JSON.stringify({
+        maxResultCount: 1,
+        locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: PLACES_RADIUS_M } },
+      }),
+    });
+  } catch (e) {
+    console.error("[places] could not reach Google:", e instanceof Error ? e.message : e);
+    return null;
+  }
+
+  if (!res.ok) {
+    // Google puts the actionable part in the body: which API to enable, which
+    // referrer the key is locked to. The key itself is never in here.
+    const detail = (await res.text().catch(() => "")).slice(0, 300);
+    console.error(`[places] Google said ${res.status}: ${detail}`);
+    return null;
+  }
+
+  const json = (await res.json()) as GoogleNearby;
   const g = json.places?.[0];
-  if (!g) return null;
+  if (!g) {
+    console.log(`[places] Google knows nothing within ${PLACES_RADIUS_M}m of ${lat.toFixed(5)},${lng.toFixed(5)}`);
+    return null;
+  }
 
   const [row] = await db().insert(places).values({
     userId,
@@ -100,5 +134,6 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
     set: { visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() },
   }).returning();
 
+  console.log(`[places] Google named ${lat.toFixed(5)},${lng.toFixed(5)} as "${row.name}"`);
   return row;
 }

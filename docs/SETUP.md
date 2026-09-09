@@ -141,7 +141,8 @@ Build in this order. Do not skip ahead; each step is testable on its own.
    itself and shows what landed; anything less certain waited, and File it
    commits it. Every fix is a tap: someone else, leave out, a tag, drop a
    fact, attach or dismiss a loose thread, clear the place. The words the
-   model wrote are tappable too: change them, Done. Filing from the
+   model wrote are tappable too: change them, change what the fact is about,
+   Done. "+ note" adds something the model never heard. Filing from the
    app embeds what it writes by asking the processor over the `PROCESSOR`
    service binding, so no model key lives on the app. "Read it again"
    re-runs extraction on a note and stops at needs review.
