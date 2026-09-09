@@ -400,7 +400,7 @@ try {
     { words, circles: tj.circles, tags: tj.tags });
   check("no circle in the row is empty", !words.includes("family") || tj.circles.includes("family"), tj.circles);
   check("tab bar: People is current and the mic goes to record", (await page.locator(".nav .nv[aria-current='true']").innerText()).trim().toLowerCase() === "people" && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
-  check("tab bar: Today and You are the placeholders left", (await page.locator(".nav .nv.soon").count()) === 2 && (await page.locator(".nav a[href='/find']").count()) === 1);
+  check("tab bar: only You is a placeholder now", (await page.locator(".nav .nv.soon").count()) === 1 && (await page.locator(".nav a[href='/today']").count()) === 1);
 
   // the person page
   await page.locator(`a.row[href='/people/${who.id}']`).click();
@@ -499,9 +499,9 @@ try {
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${OUT}/11-find.png`, fullPage: true });
   check("the empty field offers every hint the API sent", (await page.locator(".block .row .recall").count()) === sj0.hints.length, await page.locator(".block .row .recall").count());
-  check("tab bar: Find is current, Today and You are the placeholders",
+  check("tab bar: Find is current, only You is a placeholder",
     (await page.locator(".nav .nv[aria-current='true'] .nl").innerText()).trim().toLowerCase() === "find"
-    && (await page.locator(".nav .nv.soon").count()) === 2);
+    && (await page.locator(".nav .nv.soon").count()) === 1);
 
   await page.locator("#q").fill(who.displayName);
   await page.waitForSelector(".hit", { timeout: 20000 });
@@ -633,12 +633,63 @@ try {
   const anywhere = await (await page.request.get(`${BASE}/api/v1/places`)).json();
   check("with no fix at all it still lists what you know", Array.isArray(anywhere.places) && anywhere.places.some((pl) => pl.name === "Kith Test Hall"), anywhere.places);
   check("places signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/places`)).status() === 401);
+
+  /* P. Today */
+  const t0 = await page.request.get(`${BASE}/api/v1/today`);
+  const tv = await t0.json();
+  check("GET /api/v1/today is 200 with every block it draws", t0.status() === 200
+    && ["firstName", "place", "likelyHere", "threads", "slipping", "loose", "review"].every((k) => k in tv), Object.keys(tv));
+  check("Today signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/today`)).status() === 401);
+  const [openCount] = await q("select count(*) n from threads where user_id = $1 and status = 'open'", [user.id]);
+  check("Owed counts the open threads, soonest first",
+    tv.threads.length === Math.min(12, Number(openCount.n)), [tv.threads.length, openCount.n]);
+  check("a thread carries the person it is owed to", tv.threads.every((t) => t.person === null || typeof t.person.displayName === "string"));
+  // Someone you added and never met was never warm, so they are not slipping.
+  const [never] = await q("select count(*) n from people where user_id = $1 and last_interaction_at is null", [user.id]);
+  check("nobody you have never seen is called slipping",
+    Number(never.n) > 0 && tv.slipping.every((x) => x.person.lastInteractionAt !== null), [never.n, tv.slipping.length]);
+  check("slipping is only people past their own cadence", tv.slipping.every((x) => x.daysSince > x.cadenceDays), tv.slipping);
+  const [waitingNow] = await q("select count(*) n from captures where user_id = $1 and status = 'needs_review'", [user.id]);
+  check("the review count matches the notes actually waiting", tv.review.count === Number(waitingNow.n), [tv.review.count, waitingNow.n]);
+  // With coordinates at the test place, the place block names it.
+  const tHere = await (await page.request.get(`${BASE}/api/v1/today?lat=32.8&lng=-96.8`)).json();
+  check("standing at a place you know names it on Today", tHere.place?.name === "Kith Test Hall", tHere.place);
+  check("and says who you usually see there", tHere.likelyHere.some((x) => x.person.id === who.id), tHere.likelyHere.map((x) => x.person.displayName));
+  check("location adds a block and removes none", tHere.threads.length === tv.threads.length && tHere.slipping.length === tv.slipping.length);
+
+  await page.goto(`${BASE}/today`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".h1", { timeout: 20000 });
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: `${OUT}/17-today.png`, fullPage: true });
+  const greeting = (await page.locator(".h1").innerText()).replace(/\s+/g, " ").trim();
+  check("Today greets you by name, from the phone's own clock", /^good (morning|afternoon|evening),/i.test(greeting), greeting);
+  check("the mic still records and Today is the current tab",
+    (await page.locator(".nav .nv[aria-current='true'] .nl").innerText()).trim().toLowerCase() === "today"
+    && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
+  check("every block on Today has something in it", (await page.locator(".block").count()) === (await page.locator(".label").count()));
+
+  /* Q. the shell lines up, and nothing scrolls sideways but the filter row */
+  for (const [name, url] of [["today", "/today"], ["people", "/people"], ["record", "/record"], ["find", "/find?q=a"], ["person", `/people/${who.id}`]]) {
+    await page.goto(`${BASE}${url}`, { waitUntil: "networkidle" });
+    await page.waitForTimeout(600);
+    const m = await page.evaluate(() => {
+      const left = (sel) => { const e = document.querySelector(sel); return e ? Math.round(e.getBoundingClientRect().left) : null; };
+      const de = document.documentElement;
+      return { over: de.scrollWidth - de.clientWidth, bar: left(".bar span"), first: left(".h1") ?? left(".back") ?? left(".stamp") };
+    });
+    check(`${name} does not scroll sideways`, m.over === 0, m.over);
+    if (m.bar != null && m.first != null) check(`${name}: the strip lines up with the content`, m.bar === m.first, m);
+  }
+  await page.goto(`${BASE}/people`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".tabs", { timeout: 20000 });
+  check("the filter row keeps its own scroll instead of dragging the page",
+    (await page.locator(".tabs").evaluate((el) => getComputedStyle(el).overscrollBehaviorX)) === "contain");
 } catch (e) {
   failures++;
   console.log("  CRASH", e?.message ?? e);
   await page.screenshot({ path: `${OUT}/99-crash.png`, fullPage: true }).catch(() => {});
 } finally {
-  /* O. cleanup, by the ids this run made */
+  /* R. cleanup, by the ids this run made */
   if (placeId) {
     await q("delete from person_places where place_id = $1", [placeId]);
     await q("delete from places where id = $1 and user_id = $2", [placeId, user.id]);

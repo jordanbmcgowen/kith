@@ -52,8 +52,10 @@ a{color:inherit;}
   display:flex;flex-direction:column;position:relative;
 }
 .bar{
+  /* 20px, the same as .view: the strip has to line up with the rows under it,
+     and 2px out reads as the whole app being slightly loose. */
   flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;
-  padding:calc(13px + env(safe-area-inset-top,0px)) 22px 4px;
+  padding:calc(13px + env(safe-area-inset-top,0px)) 20px 4px;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-3);
 }
 .demo-flag{
@@ -167,7 +169,14 @@ button.row:active{background:var(--rule);}
 .loose q{font-family:var(--serif);font-style:italic;font-weight:300;font-size:15.5px;line-height:1.5;color:var(--text);quotes:'\201C' '\201D';}
 
 /* ───────────────────────────── underline tabs ──────────────────────────── */
-.tabs{display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;border-bottom:1px solid var(--rule);}
+/* The filter row scrolls sideways. `contain` keeps that scroll inside the row:
+   without it a sideways fling chains out to the page and the whole app
+   rubber-bands, which reads as the layout being loose rather than as a row
+   that moves. */
+.tabs{
+  display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;
+  overscroll-behavior-x:contain;border-bottom:1px solid var(--rule);
+}
 .tabs::-webkit-scrollbar{display:none;}
 .tabs button{flex:0 0 auto;padding:0 0 11px;font-size:13px;color:var(--text-3);position:relative;transition:color .2s ease;white-space:nowrap;}
 .tabs button::after{
@@ -309,7 +318,10 @@ a.nv{text-decoration:none;}
 .review:hover{text-decoration:underline;text-underline-offset:3px;}
 .back{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);text-decoration:none;margin-top:14px;}
 .back:hover{color:var(--text);}
-a.row{text-decoration:none;color:inherit;}
+/* Row-shaped links are surfaces, not sentences: the whole row is the
+   affordance, so none of them carry an underline. Underlines belong to .act
+   and .link, which are words you press. */
+a.row,a.thread,a.loose{text-decoration:none;color:inherit;}
 a.row:hover{background:var(--raise);padding-left:6px;}
 a.row:active{background:var(--rule);}
 

@@ -128,6 +128,19 @@ export type PersonPatch = {
   tags?: string[];
 };
 
+/** The home screen in one shape. Every block hides when it is empty. */
+export type TodayView = {
+  /** For the greeting. The time of day comes from the phone, not from here. */
+  firstName: string | null;
+  place: { id: string; name: string; distanceM: number } | null;
+  likelyHere: { person: PersonRow; place: string }[];
+  threads: { id: string; title: string; dueAt: string | null; captureId: string | null; person: { id: string; displayName: string } | null }[];
+  /** Seen at least once and past their cadence. Someone never met was never warm. */
+  slipping: { person: PersonRow; daysSince: number; cadenceDays: number }[];
+  loose: { id: string; content: string; captureId: string | null; at: string }[];
+  review: { count: number; oldestId: string | null };
+};
+
 /** A place you have already named. Nearest first when the phone has a fix. */
 export type NearbyPlace = { id: string; name: string; distanceM: number | null };
 
@@ -198,6 +211,8 @@ export type Store = {
   removeVisit(personId: string, visitId: string): Promise<void>;
   /** Places you have already named, nearest first. Never throws on no fix. */
   places(coords?: Coords | null): Promise<NearbyPlace[]>;
+  /** The home screen. Coordinates name the place and lift who is near; they hide nobody. */
+  today(coords?: Coords | null): Promise<TodayView>;
 };
 
 export class ApiError extends Error {
@@ -406,6 +421,21 @@ const demoStore: Store = {
   async places() {
     return Object.values(DEMO_DETAIL).flatMap((d) => d.places).map((p) => ({ id: p.id, name: p.name, distanceM: 120 }));
   },
+  async today() {
+    const detail = DEMO_DETAIL[DEMO_PEOPLE[0].id];
+    return {
+      firstName: "Jordan",
+      place: { id: detail.places[0].id, name: detail.places[0].name, distanceM: 40 },
+      likelyHere: [{ person: DEMO_PEOPLE[0], place: detail.places[0].name }],
+      threads: detail.threads.map((t) => ({
+        id: t.id, title: t.title, dueAt: t.dueAt, captureId: t.createdFromCaptureId,
+        person: { id: DEMO_PEOPLE[0].id, displayName: DEMO_PEOPLE[0].displayName },
+      })),
+      slipping: [{ person: DEMO_PEOPLE[3], daysSince: 96, cadenceDays: 45 }],
+      loose: [{ id: "00000000-0000-4000-8000-0000000000l1", content: "Someone at the owner council has a kid at SMU on a golf scholarship.", captureId: null, at: DEMO_AGO(3) }],
+      review: { count: DEMO_CAPTURES.filter((c) => c.status === "needs_review").length, oldestId: null },
+    };
+  },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
 
@@ -529,6 +559,13 @@ const liveStore: Store = {
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
     const s = qs.toString();
     return api<{ places: NearbyPlace[] }>(`/api/v1/places${s ? `?${s}` : ""}`).then((r) => r.places);
+  },
+
+  today(coords) {
+    const qs = new URLSearchParams();
+    if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
+    const s = qs.toString();
+    return api<TodayView>(`/api/v1/today${s ? `?${s}` : ""}`);
   },
 };
 

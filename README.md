@@ -34,7 +34,8 @@ src/
   app/people/             the people list, by circle and tag (step 4)
   app/people/[id]/        the person page, read only (step 4)
   app/find/               search, names and memories together (step 5)
-  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TagAdder, TabBar, Shell
+  app/today/              the home screen: owed, slipping, loose, who is near
+  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TodayScreen, TagAdder, TabBar, Shell
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
@@ -44,9 +45,8 @@ prototype/
   index.html              the interactive design reference. open it in a browser.
 ```
 
-The capture, confirmation, people, person and find screens exist as React. The
-Today and You screens are still only in `prototype/index.html`, which remains
-the design reference and carries the demo-data seam described in `CLAUDE.md`.
+Every screen but You exists as React. `prototype/index.html` remains the design
+reference and carries the demo-data seam described in `CLAUDE.md`.
 
 ## The one idea worth protecting
 

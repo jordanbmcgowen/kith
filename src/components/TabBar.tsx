@@ -3,20 +3,23 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * The tab bar from the prototype: Today, People, the mic, Find, You. People,
- * the mic and Find are live. Today and You are dimmed and inert until their
- * steps; a tab that goes nowhere is better than a screen that says so.
- * The mic is the one circle in the bar because a circle means "press me".
+ * The tab bar from the prototype: Today, People, the mic, Find, You. Only You
+ * is still dimmed and inert; a tab that goes nowhere is better than a screen
+ * that says so. The mic is the one circle in the bar, because a circle means
+ * "press me".
  */
 export function TabBar() {
   const path = usePathname() ?? "";
   const current = path === "/people" || path.startsWith("/people/") ? "people"
     : path === "/find" ? "find"
+    : path === "/today" ? "today"
     : null;
 
   return (
     <nav className="nav" aria-label="Kith">
-      <Soon label="Today">{HOME}</Soon>
+      <Link href="/today" className="nv" aria-current={current === "today" ? "true" : undefined}>
+        {HOME}<span className="nl">Today</span>
+      </Link>
       <Link href="/people" className="nv" aria-current={current === "people" ? "true" : undefined}>
         {USERS}<span className="nl">People</span>
       </Link>

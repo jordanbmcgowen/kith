@@ -28,6 +28,29 @@ work here:
 - If you are about to do something with real consequences (drop a table, force
   push, change auth scopes, deploy to production), stop and say so first.
 
+## Waiting on Jordan
+
+The running list of things only he can do. Keep it current: add an item when
+something needs him, strike it when it is done, and say what is on it when he
+asks what is left.
+
+- [ ] **`GOOGLE_PLACES_KEY` on kith-processor.** Turns coordinates alone into a
+      named place, which is what makes "Here" work without typing. Cloud
+      console: enable Places API on the Kith project, make an API key. Then
+      dash.cloudflare.com, Workers & Pages, kith-processor, Settings, Variables
+      and Secrets, add a secret named exactly `GOOGLE_PLACES_KEY`. He does this
+      in a browser; nobody pastes it into a session. Said 2026-09-09 that he
+      would get to it later. Until then, naming a place by hand works and each
+      name makes the next one a tap.
+- [ ] **Two weeks of using it.** Not a task, a standing one: what he hits while
+      using the app is what decides the next build. Every item in "Built, from
+      use" below came from that.
+
+Done:
+
+- [x] Review the Banner House note (filed 2026-09-09; it is where the Banner
+      House, Meridoh and Pizza Hut tags came from).
+
 ## Where things stand
 
 Built and reviewed:
@@ -272,13 +295,33 @@ Jordan used the app and two things came back. Both are built.
   with no places location can rank nothing. The Find screen now asks for a fix
   once per visit and passes it to search, where it only ever reorders.
 - Still missing for location to feel automatic: `GOOGLE_PLACES_KEY` on
-  kith-processor, which turns coordinates alone into a named place. Jordan adds
-  it in the Cloudflare dashboard (Workers, kith-processor, Settings, Variables
-  and Secrets); nobody needs to paste it here.
+  kith-processor, which turns coordinates alone into a named place. See
+  "Waiting on Jordan" at the top.
+- **Today.** `GET /api/v1/today?lat=&lng=` in one round trip: the place you are
+  at, who you usually see there, what you owe, who is slipping, what Kith heard
+  and could not place, and how many notes are waiting for a look. Every block
+  hides when it is empty, so a quiet day is a short screen and not five
+  headings over nothing. `src/components/TodayScreen.tsx` at `/today`; the
+  greeting reads the phone's clock, not the server's, because a good morning
+  from the wrong timezone is worse than none. Slipping means seen at least once
+  and past their own cadence: someone added and never met was never warm, and
+  34 of the roster are in that state. Only You is a placeholder tab now.
+- **Two sizing bugs, both measured rather than guessed.** The top strip sat at
+  22px while every row under it sat at 20px, which reads as the whole app being
+  slightly loose; they are both 20px now. And `.tabs` had no
+  `overscroll-behavior`, so a sideways fling on the filter row chained out to
+  the page and the whole app rubber-banded; it is `contain` now. Worth knowing
+  for the next report of "it feels off": the document itself measures 0px of
+  horizontal overflow on every screen at 320, 390 and 430 wide, so the page has
+  never scrolled sideways. The filter row was the only thing that moved. The
+  live check now asserts both, on all five screens.
+- Row-shaped links (`a.row`, `a.thread`, `a.loose`) carry no underline: the row
+  is the affordance. Underlines belong to `.act` and `.link`, which are words
+  you press.
 
 Not built yet:
 
-- The Today and You screens. Placeholder tabs.
+- The You screen. A placeholder tab.
 - Marking a thread done; merging or deleting people.
 - PWA manifest and service worker
 - Web push
