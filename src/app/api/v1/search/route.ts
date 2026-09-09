@@ -7,7 +7,6 @@ import { embedVia } from "@/lib/ai/embed";
 import { excerpt } from "@/lib/format";
 import { bbox, haversineM, locationBoost } from "@/lib/geo";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import type { Circle } from "@/db/schema";
 
 /**
  * GET /api/v1/search?q=the+guy+at+the+golf+thing+who+flies&lat=&lng=
@@ -60,7 +59,6 @@ type Hit = {
   display_name: string;
   goes_by: string | null;
   pronunciation: string | null;
-  circle: Circle;
   tags: string[];
   role: string | null;
   last_interaction_at: Date | string | null;
@@ -219,7 +217,7 @@ function searchSql(userId: string, q: string, vec: number[] | null) {
       from kept order by person_id, score desc
     )
     select b.person_id, b.score, b.snippet, b.source, b.at,
-           p.display_name, p.goes_by, p.pronunciation, p.circle, p.tags, p.role,
+           p.display_name, p.goes_by, p.pronunciation, p.tags, p.role,
            p.last_interaction_at, p.warmth
     from best b
     join ${people} p on p.id = b.person_id and p.user_id = ${userId} and p.archived_at is null
@@ -256,7 +254,6 @@ async function rank(userId: string, rows: Hit[], here: { lat: number; lng: numbe
           displayName: r.display_name,
           goesBy: r.goes_by,
           pronunciation: r.pronunciation,
-          circle: r.circle,
           tags: r.tags,
           role: r.role,
           lastInteractionAt: iso(r.last_interaction_at),

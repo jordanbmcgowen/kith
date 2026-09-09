@@ -11,10 +11,10 @@
  * `fetch` or `navigator` until a method is called, and the schema imports are
  * types only.
  */
-import type { ExtractionResult, CaptureFiling, FilingDecisions, Circle, FactKind } from "@/db/schema";
+import type { ExtractionResult, CaptureFiling, FilingDecisions, FactKind } from "@/db/schema";
 import type { FilingCounts } from "@/lib/filing";
 
-export type { ExtractionResult, CaptureFiling, FilingDecisions, Circle, FactKind, FilingCounts };
+export type { ExtractionResult, CaptureFiling, FilingDecisions, FactKind, FilingCounts };
 
 export type CaptureStatus = "uploaded" | "transcribing" | "extracting" | "needs_review" | "filed" | "failed";
 
@@ -39,8 +39,8 @@ export type PersonLite = {
   id: string;
   displayName: string;
   goesBy: string | null;
-  circle: Circle;
-  /** The user's own groups for this person: "YoungLife", "Journeymen". */
+  /** The user's own groups for this person: "YoungLife", "Journeymen". Kith
+   *  has no groups of its own; these are the only ones. */
   tags: string[];
   role: string | null;
   _demo?: true;
@@ -54,15 +54,13 @@ export type PersonRow = PersonLite & {
   warmth: number;
 };
 
-/** The people list narrows by circle and by tag. Never by location. */
-export type PeopleFilter = { circle?: Circle | "all"; tag?: string | null };
+/** The people list narrows by tag, and by nothing else. Never by location. */
+export type PeopleFilter = { tag?: string | null };
 
 export type PeopleList = {
   people: PersonRow[];
   /** Every tag the user has, most used first, for the filter row. Whole roster, whatever the filter. */
   tags: string[];
-  /** Only the circles that hold someone, in circle order. Whole roster, whatever the filter. */
-  circles: Circle[];
   /** For the line under the heading. Whole roster, whatever the filter. */
   counts: { people: number; facts: number; places: number };
 };
@@ -74,7 +72,7 @@ export type PersonView = {
     company: string | null;
     title: string | null;
     birthday: string | null;
-    /** The cadence that applies to them, in days: their own or the circle default. */
+    /** The cadence that applies to them, in days: their own or your default. */
     cadenceDays: number;
     cadenceIsDefault: boolean;
     createdAt: string;
@@ -123,7 +121,8 @@ export type PersonPatch = {
   pronouns?: string | null;
   role?: string | null;
   company?: string | null;
-  circle?: Circle;
+  /** Days between visits for this one person. Null goes back to your default. */
+  cadenceDays?: number | null;
   /** The complete list after this edit, not an addition. */
   tags?: string[];
 };
@@ -148,8 +147,8 @@ export type Me = {
   image: string | null;
   timezone: string;
   since: string;
-  /** Days between visits, per circle. What Today means by slipping. */
-  cadence: Record<string, number>;
+  /** Days between visits. One number: what Today means by slipping. */
+  cadence: number;
   /** Derived from the scopes Google actually granted, never from a wish list. */
   connected: { google: boolean; calendar: boolean; contacts: boolean };
   counts: { people: number; facts: number; visits: number; threads: number; places: number; notes: number; loose: number };
@@ -207,7 +206,7 @@ export type Store = {
   rerun(id: string): Promise<void>;
   /** How many notes are waiting for a look, and the oldest one. */
   reviewQueue(): Promise<{ count: number; oldestId: string | null }>;
-  /** The people list, narrowed by circle and tag. */
+  /** The people list, narrowed by tag. */
   people(filter?: PeopleFilter): Promise<PeopleList>;
   /** One person with everything the person page shows. 404 becomes an ApiError. */
   person(id: string): Promise<PersonView>;
@@ -230,7 +229,7 @@ export type Store = {
   /** Your account, your counts, and your cadences. */
   me(): Promise<Me>;
   /** Changing a cadence recomputes warmth for everyone who inherits it. */
-  updateMe(patch: { timezone?: string; cadence?: Record<string, number> }): Promise<void>;
+  updateMe(patch: { timezone?: string; cadence?: number }): Promise<void>;
 };
 
 export class ApiError extends Error {
@@ -242,14 +241,13 @@ export class ApiError extends Error {
    anything. Every record carries _demo:true so one grep finds any that
    escaped. Nothing outside this block may reference a DEMO_ identifier.
    ══════════════════════════════════════════════════════════════════════════════════════════ */
-const CIRCLE_KEYS: Circle[] = ["family", "friends", "work", "neighbors", "other"];
 const DEMO_DAY = 86_400_000;
 const DEMO_AGO = (days: number) => new Date(Date.now() - days * DEMO_DAY).toISOString();
 const DEMO_PEOPLE: PersonRow[] = [
-  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, pronunciation: "MAR-kus ELL-er-ee", circle: "friends", tags: ["Brook Hollow"], role: "Franchisee, three territories. Flies a Cirrus.", lastInteractionAt: DEMO_AGO(8), warmth: 74 },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, pronunciation: null, circle: "friends", tags: [], role: "Wine buyer, Bishop Cellars", lastInteractionAt: DEMO_AGO(6), warmth: 88 },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, pronunciation: null, circle: "neighbors", tags: ["Lakewood"], role: "Two doors down, the blue house", lastInteractionAt: DEMO_AGO(4), warmth: 92 },
-  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, pronunciation: "WIT-field", circle: "work", tags: ["Bright Path"], role: "VP Operations, Bright Path Brands", lastInteractionAt: null, warmth: 50 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000001", displayName: "Marcus Ellery", goesBy: null, pronunciation: "MAR-kus ELL-er-ee", tags: ["Brook Hollow"], role: "Franchisee, three territories. Flies a Cirrus.", lastInteractionAt: DEMO_AGO(8), warmth: 74 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000002", displayName: "Priya Raman", goesBy: null, pronunciation: null, tags: [], role: "Wine buyer, Bishop Cellars", lastInteractionAt: DEMO_AGO(6), warmth: 88 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000003", displayName: "Carlos Mendez", goesBy: null, pronunciation: null, tags: ["Lakewood"], role: "Two doors down, the blue house", lastInteractionAt: DEMO_AGO(4), warmth: 92 },
+  { _demo: true, id: "00000000-0000-4000-8000-000000000004", displayName: "Dana Whitfield", goesBy: null, pronunciation: "WIT-field", tags: ["Bright Path"], role: "VP Operations, Bright Path Brands", lastInteractionAt: null, warmth: 50 },
 ];
 
 /** What the person page shows for the first demo person. Everyone else is empty, which is also a state to build for. */
@@ -294,7 +292,7 @@ const DEMO_EXTRACTION_1: ExtractionResult = {
 };
 
 const DEMO_EXTRACTION_2: ExtractionResult = {
-  people: [{ matchedPersonId: null, name: "Dev", confidence: 0.55, isNew: true, circle: "neighbors", role: "Runs the roaster in Bishop Arts", tags: ["Bishop Arts"] }],
+  people: [{ matchedPersonId: null, name: "Dev", confidence: 0.55, isNew: true, role: "Runs the roaster in Bishop Arts", tags: ["Bishop Arts"] }],
   facts: [{ personName: "Dev", kind: "relation", content: "Kid starts at Lakewood this fall", confidence: 0.85 }],
   interactions: [{ personName: "Dev", summary: "Met at the roaster in Bishop Arts", occurredAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), channel: "in_person" }],
   threads: [],
@@ -372,15 +370,12 @@ const demoStore: Store = {
   },
   async people(filter = {}) {
     const tag = filter.tag?.toLowerCase();
-    const list = DEMO_PEOPLE.filter((p) =>
-      (!filter.circle || filter.circle === "all" || p.circle === filter.circle)
-      && (!tag || p.tags.some((t) => t.toLowerCase() === tag)));
+    const list = DEMO_PEOPLE.filter((p) => !tag || p.tags.some((t) => t.toLowerCase() === tag));
     const facts = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.facts.length, 0);
     const places = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.places.length, 0);
     return {
       people: list,
       tags: [...new Set(DEMO_PEOPLE.flatMap((p) => p.tags))],
-      circles: CIRCLE_KEYS.filter((c) => DEMO_PEOPLE.some((p) => p.circle === c)),
       counts: { people: DEMO_PEOPLE.length, facts, places },
     };
   },
@@ -458,7 +453,7 @@ const demoStore: Store = {
     return {
       name: "Jordan McGowen", email: "you@example.com", image: null,
       timezone: "America/Chicago", since: DEMO_AGO(120),
-      cadence: { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 },
+      cadence: 60,
       connected: { google: true, calendar: false, contacts: false },
       counts: { people: DEMO_PEOPLE.length, facts: 4, visits: 3, threads: 2, places: 2, notes: DEMO_CAPTURES.length, loose: 1 },
     };
@@ -548,7 +543,6 @@ const liveStore: Store = {
 
   people(filter = {}) {
     const qs = new URLSearchParams();
-    if (filter.circle && filter.circle !== "all") qs.set("circle", filter.circle);
     if (filter.tag) qs.set("tag", filter.tag);
     const s = qs.toString();
     return api<PeopleList>(`/api/v1/people${s ? `?${s}` : ""}`);

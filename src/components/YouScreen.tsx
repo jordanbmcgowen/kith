@@ -1,8 +1,7 @@
 "use client";
 import { useEffect, useState, type ReactNode, type CSSProperties } from "react";
 import { store, type Me } from "@/lib/store";
-import { CIRCLES, initials } from "@/lib/circles";
-import { fmtDay } from "@/lib/format";
+import { fmtDay, initials } from "@/lib/format";
 
 const style = (i: number, extra?: CSSProperties) => ({ "--i": Math.min(i, 14), ...extra }) as CSSProperties;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -12,15 +11,19 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * that do not exist yet, and a screen of dead switches is worse than no screen.
  * What is here is what is real.
  *
- * The cadences matter most. They decide who Today calls slipping and how
- * warmth orders every list, and until now they lived in the database with
- * nowhere to see them. A judgment you cannot see is not one you can argue
- * with, so they are on screen and editable.
+ * The cadence matters most. It decides who Today calls slipping and how warmth
+ * orders every list, and it used to live in the database with nowhere to see
+ * it. A judgment you cannot see is not one you can argue with, so it is on
+ * screen and editable.
+ *
+ * One number, not five. There were five, one per circle, and circles are gone:
+ * sixty of sixty-one people were in "other", so four of those numbers
+ * described nobody. Anyone who needs their own has it on their own page.
  */
 export function YouScreen({ signOut }: { signOut: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Record<string, number> | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -33,14 +36,16 @@ export function YouScreen({ signOut }: { signOut: ReactNode }) {
 
   if (error) return <p className="empty">Couldn&rsquo;t load your account.<br /><em>{error}</em></p>;
 
-  const cadence = draft ?? me?.cadence ?? {};
-  const changed = !!draft && !!me && CIRCLES.some((c) => draft[c.key] !== me.cadence[c.key]);
+  const cadence = draft ?? String(me?.cadence ?? "");
+  const days = Number(cadence);
+  const valid = Number.isInteger(days) && days >= 1 && days <= 365;
+  const changed = draft !== null && !!me && days !== me.cadence;
 
   const save = async () => {
-    if (!draft || !me) return;
+    if (!changed || !valid || !me) return;
     setBusy(true);
     try {
-      await store.updateMe({ cadence: draft });
+      await store.updateMe({ cadence: days });
       setMe(await store.me());
       setDraft(null);
     } catch (e) {
@@ -72,31 +77,24 @@ export function YouScreen({ signOut }: { signOut: ReactNode }) {
       <section className="block">
         <div className="label">Keeping up</div>
         <p className="lede" style={{ padding: "6px 0 4px" }}>
-          How often you want to see each circle. It is what Today means by slipping,
-          and what the warmth meter reads against. Nobody is told, and nothing is scored.
+          How often you want to see people. It is what Today means by slipping,
+          and what the warmth meter reads against. Anyone who needs their own
+          number has it on their page. Nobody is told, and nothing is scored.
         </p>
-        <div className="list">
-          {CIRCLES.map((circle, i) => (
-            <label key={circle.key} className="cad anim" style={style(i + 2)}>
-              <span className="sq" style={{ "--c": circle.color } as CSSProperties} />
-              <span className="cad-name">{circle.label}</span>
-              <input
-                type="number" min={1} max={365} inputMode="numeric"
-                value={cadence[circle.key] ?? ""}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  setDraft({ ...cadence, [circle.key]: Number.isFinite(n) ? n : 0 });
-                }}
-              />
-              <span className="cad-unit">days</span>
-            </label>
-          ))}
-        </div>
+        <label className="cad anim" style={style(2)}>
+          <span className="cad-name">See people every</span>
+          <input
+            type="number" min={1} max={365} inputMode="numeric"
+            value={cadence}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <span className="cad-unit">days</span>
+        </label>
         {changed && (
           <div className="meta" style={{ marginTop: 16, gap: 18 }}>
-            <button className="act gold" onClick={save} disabled={busy}>{busy ? "Saving" : "Save"}</button>
+            <button className="act gold" onClick={save} disabled={busy || !valid}>{busy ? "Saving" : "Save"}</button>
             <button className="act" onClick={() => setDraft(null)} disabled={busy}>Cancel</button>
-            <span>Rewrites every warmth meter</span>
+            <span>{valid ? "Rewrites every warmth meter" : "1 to 365 days"}</span>
           </div>
         )}
       </section>

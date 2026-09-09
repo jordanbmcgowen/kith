@@ -5,6 +5,7 @@
 
    Hard rules (breaking one is a bug):
      no cards, no fills behind content, no colored left rails
+     groups are the user's tags only; the app invents none of its own
      border-radius 0 everywhere except the record and mic buttons
      no pill chips; filters are text with an underline
      warmth is a 2px meter, never a ring
@@ -22,10 +23,14 @@
   --gold:#E8B33F;      /* the app's own voice: live, matched, primary action */
   --alert:#FF6B4A;     /* overdue. nothing else, ever. */
 
-  --clay:#C9856B;      /* family    */
-  --verdigris:#4FB39E; /* friends   */
-  --sky:#6D9FD8;       /* work      */
-  --wisteria:#B58AD4;  /* neighbors */
+  /* These four coloured the five circles. Circles are gone: the app invented
+     those groups and sixty of sixty-one people landed in "other". Verdigris
+     still carries the "why" line and the one On marker; the rest are kept
+     against a future that needs a second accent, and are used nowhere. */
+  --clay:#C9856B;
+  --verdigris:#4FB39E;
+  --sky:#6D9FD8;
+  --wisteria:#B58AD4;
 
   --serif:"Fraunces",Georgia,serif;
   --sans:"Schibsted Grotesk","Helvetica Neue",Arial,sans-serif;
@@ -109,7 +114,6 @@ button.row:active{background:var(--rule);}
   color:var(--text-3);display:flex;align-items:center;gap:12px;flex-wrap:wrap;
 }
 .meta .live{color:var(--gold);}
-.meta .circ{display:inline-flex;align-items:center;gap:6px;}
 .sq{width:6px;height:6px;background:var(--c,var(--text-3));display:inline-block;flex:0 0 auto;}
 
 /* Warmth: a hairline meter, not a ring. Fills on mount. */
@@ -185,7 +189,8 @@ button.row:active{background:var(--rule);}
 }
 .tabs button[aria-pressed="true"]{color:var(--text);font-weight:600;}
 .tabs button[aria-pressed="true"]::after{transform:scaleX(1);}
-/* Six circle words on a 390px phone: a touch tighter than the prototype's five. */
+/* A row of the user's own tags on a 390px phone: tighter than the prototype,
+   which only ever had five words to fit. */
 .tabs.circle-row{gap:16px;}
 .tabs.circle-row button{font-size:12.5px;}
 .tabs.sub button{font-size:12.5px;padding-top:11px;}
@@ -339,18 +344,6 @@ a.row:active{background:var(--rule);}
 .pb .row{padding:0;border-bottom:none;}
 .pb .row:hover{background:none;padding-left:0;}
 
-/* The five circles as text, the active one underlined in its own color. One tap each. */
-.circles{display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;}
-.circles button{
-  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);
-  padding:2px 0 7px;position:relative;transition:color .2s ease;
-}
-.circles button::after{
-  content:"";position:absolute;left:0;right:0;bottom:2px;height:2px;background:var(--c,var(--gold));
-  transform:scaleX(0);transform-origin:left;transition:transform .28s cubic-bezier(.2,.9,.25,1);
-}
-.circles button[aria-pressed="true"]{color:var(--text);}
-.circles button[aria-pressed="true"]::after{transform:scaleX(1);}
 
 /* Facts, interactions and follow-ups under their person, aligned with the name. */
 .items{margin:6px 0 0 54px;}
@@ -417,8 +410,8 @@ a.row:active{background:var(--rule);}
 }
 .pedit .field input{font-size:15px;}
 
-/* Cadence: one ruled line per circle, the number set in mono because it is
-   countable. A stepper, not a slider: these are days, and you know the number. */
+/* Cadence: a ruled line with the number set in mono, because it is countable.
+   A field, not a slider: these are days, and you know the number. */
 .cad{
   display:flex;align-items:center;gap:12px;padding:14px 0;
   border-bottom:1px solid var(--rule);

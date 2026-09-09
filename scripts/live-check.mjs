@@ -190,7 +190,7 @@ try {
   // The model may match the test people to the user's own people. Point
   // every matched person at "someone new" through the picker, then prove
   // that every block reads New before a single tap that leads to File it.
-  // Filing onto a real row would change their circle, tags and warmth, and
+  // Filing onto a real row would change their tags and warmth, and
   // cleanup cannot put those back.
   for (let i = 0; i < x.people.length; i++) {
     if (!x.people[i].matchedPersonId) continue;
@@ -204,10 +204,9 @@ try {
   check("every person on the test note is new, none of the user's own", allNew, statuses);
   if (!allNew) throw new Error("refusing to file: the test note would land on the user's own people");
 
-  // circle taps: first person Work, second Friends
-  await blocks.nth(0).locator(".circles button", { hasText: "Work" }).click();
-  await blocks.nth(1).locator(".circles button", { hasText: "Friends" }).click();
-  check("circle tap underlines the choice", /^work$/i.test((await blocks.nth(0).locator(".circles button[aria-pressed='true']").innerText()).trim()));
+  // No circle row to tap any more: the app invents no groups, so there is
+  // nothing here but the tags the note itself proposed.
+  check("the review screen offers no groups of the app's own", (await page.locator(".circles").count()) === 0);
   // drop the first fact of the second person, if any
   const bravoFacts = blocks.nth(1).locator(".item");
   const droppedFact = (await bravoFacts.count()) ? await bravoFacts.nth(0).locator(".it").innerText() : null;
@@ -298,9 +297,8 @@ try {
   const [cap] = await q("select status, filing, place_id from captures where id = $1", [captureId]);
   check("status filed by user", cap.status === "filed" && cap.filing?.by === "user", [cap.status, cap.filing?.by]);
   createdIds = cap.filing?.created.map((c) => c.personId) ?? [];
-  const ppl = await q("select id, display_name, circle from people where id = any($1::uuid[])", [createdIds]);
+  const ppl = await q("select id, display_name from people where id = any($1::uuid[])", [createdIds]);
   check("two people created, the third left out", ppl.length === Math.max(0, x.people.length - 1) && !ppl.some((p) => p.display_name === x.people[2]?.name), ppl);
-  check("circles came from the taps", ppl.find((p) => p.display_name === x.people[0].name)?.circle === "work" && ppl.find((p) => p.display_name === x.people[1].name)?.circle === "friends", ppl);
   const tagged = await q("select display_name, tags from people where id = any($1::uuid[])", [createdIds]);
   check("typed tag landed on both people, one spelling", tagged.every((p) => p.tags.some((t) => t === "Kith Test Board")), tagged);
   const f = await q("select content, person_id from facts where capture_id = $1", [captureId]);
@@ -324,11 +322,10 @@ try {
   check("filed note reads 'Here's what I filed' with Done", /I filed/.test(h1b) && (await page.locator("button.btn").first().innerText()).trim() === "Done", h1b);
   check("left-out person still shows as left out", x.people.length > 2 ? await page.locator(".pb").nth(2).evaluate((el) => el.classList.contains("out")) : true);
   await page.screenshot({ path: `${OUT}/07-note-filed.png`, fullPage: true });
-  await page.locator(".pb").nth(1).locator(".circles button", { hasText: "Neighbors" }).click();
   await page.locator("button.btn", { hasText: "Done" }).click();
   await page.waitForURL(`${BASE}/record`, { timeout: 30000 });
-  const ppl2 = await q("select display_name, circle from people where id = any($1::uuid[])", [createdIds]);
-  check("Done re-filed: circle changed, still the same two rows", ppl2.length === ppl.length && ppl2.find((p) => p.display_name === x.people[1].name)?.circle === "neighbors", ppl2);
+  const ppl2 = await q("select display_name from people where id = any($1::uuid[])", [createdIds]);
+  check("Done re-filed: still the same two rows", ppl2.length === ppl.length, ppl2);
   const [cnt] = await q("select (select count(*) from facts where capture_id = $1) f, (select count(*) from loose_threads where capture_id = $1) l", [captureId]);
   check("re-file did not duplicate rows", Number(cnt.f) === f.length && Number(cnt.l) === loose.length, cnt);
 
@@ -362,7 +359,8 @@ try {
   const tj = await byTag.json();
   check("the tag filter returns exactly the people this note created", tj.people.length === createdIds.length && tj.people.every((p) => createdIds.includes(p.id) && p.tags.includes(TAG)), tj.people.map((p) => p.displayName));
   check("the list carries the user's tags and roster counts, unfiltered", tj.tags.includes(TAG) && tj.counts.people > createdIds.length && typeof tj.counts.facts === "number", { tags: tj.tags, counts: tj.counts });
-  check("an unknown circle is a 400", (await page.request.get(`${BASE}/api/v1/people?circle=bogus`)).status() === 400);
+  check("a leftover circle in a URL is ignored, not an error",
+    (await page.request.get(`${BASE}/api/v1/people?circle=bogus`)).status() === 200);
   const views = [];
   for (const id of createdIds) {
     const r = await page.request.get(`${BASE}/api/v1/people/${id}`);
@@ -376,7 +374,6 @@ try {
   check("person view has every block the page renders", ["facts", "threads", "interactions", "places", "notes"].every((k) => Array.isArray(V[k])) && typeof who.cadenceDays === "number", Object.keys(V));
   check("the note that made them is in their notes", V.notes.some((n) => n.id === captureId), V.notes.map((n) => n.id));
   check("their facts and visits point back at this note", [...V.facts, ...V.interactions].every((x) => x.captureId === captureId));
-  check("the circle tapped on the note is on the page", ["work", "neighbors"].includes(who.circle), who.circle);
   check("no tenant column on the person", !("userId" in who));
   check("a malformed person id is a 404", (await page.request.get(`${BASE}/api/v1/people/not-a-uuid`)).status() === 404);
   check("an unknown person id is a 404", (await page.request.get(`${BASE}/api/v1/people/00000000-0000-4000-8000-00000000dead`)).status() === 404);
@@ -390,17 +387,17 @@ try {
   check("the list shows exactly this note's people under the tag", (await page.locator("a.row[href^='/people/']").count()) === createdIds.length, await page.locator("a.row[href^='/people/']").count());
   check("the tag filter is underlined", (await page.locator(".tabs button[aria-pressed='true']").innerText()).trim() === TAG);
   check("the stamp counts the filtered view", /^\d+ of \d+/i.test((await page.locator(".stamp").first().innerText()).trim()), await page.locator(".stamp").first().innerText());
-  // One row, and only circles that actually hold someone: five words that
-  // return nothing are five words in the way.
+  // One row, holding the user's own tags and nothing the app invented.
   const words = (await page.locator(".tabs button").allInnerTexts()).map((w) => w.trim().toLowerCase());
   check("one filter row, not two", (await page.locator(".tabs").count()) === 1, await page.locator(".tabs").count());
-  check("it starts with Everyone, then the circles in use, then the tags",
+  check("it is Everyone and then the user's tags, nothing else",
     words[0] === "everyone"
-    && tj.circles.every((c) => words.includes(c))
     && tj.tags.every((t) => words.includes(t.toLowerCase()))
-    && words.length === 1 + tj.circles.length + tj.tags.length,
-    { words, circles: tj.circles, tags: tj.tags });
-  check("no circle in the row is empty", !words.includes("family") || tj.circles.includes("family"), tj.circles);
+    && words.length === 1 + tj.tags.length,
+    { words, tags: tj.tags });
+  check("no circle word survives anywhere in the row",
+    !["family", "friends", "work", "neighbors", "other"].some((c) => words.includes(c)), words);
+  check("and the list no longer reports circles at all", tj.circles === undefined, Object.keys(tj));
   check("tab bar: People is current and the mic goes to record", (await page.locator(".nav .nv[aria-current='true']").innerText()).trim().toLowerCase() === "people" && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
   check("tab bar: all five tabs go somewhere", (await page.locator(".nav .nv.soon").count()) === 0
     && (await page.locator(".nav a").count()) === 5);
@@ -411,7 +408,8 @@ try {
   await page.waitForSelector(".phead", { timeout: 20000 });
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${OUT}/10-person.png`, fullPage: true });
-  check("name, circle and tag on the page", (await page.locator(".pname").innerText()).trim() === who.displayName && (await page.locator(".phead .meta").innerText()).toLowerCase().includes(TAG.toLowerCase()));
+  check("name and tag on the page", (await page.locator(".pname").innerText()).trim() === who.displayName && (await page.locator(".phead .meta").innerText()).toLowerCase().includes(TAG.toLowerCase()));
+  check("and no circle beside them", !/family|friends|work|neighbors|other/i.test(await page.locator(".phead .meta").innerText()));
   check("stats: since seen, cadence, and warmth as a meter", (await page.locator(".stat").count()) === 3 && (await page.locator(".stat .meter").count()) === 1);
   check("Remember first lists every fact", (await page.locator(".fact").count()) === V.facts.length, await page.locator(".fact").count());
   check("open threads render with a due line", (await page.locator(".thread").count()) === V.threads.length && (V.threads.length === 0 || /Due|Overdue|No date/i.test(await page.locator(".thread .tmeta").first().innerText())), await page.locator(".thread").count());
@@ -454,7 +452,8 @@ try {
   check("the why line says the name is what caught", /their name/i.test(top?.why ?? ""), top?.why);
   check("the processor answered: this was not the names-only fallback", byName.namesOnly === undefined, byName.namesOnly);
   check("a result carries the row the people list draws, and no tenant column",
-    ["id", "displayName", "goesBy", "pronunciation", "circle", "tags", "role", "lastInteractionAt", "warmth"].every((k) => k in (top?.person ?? {}))
+    ["id", "displayName", "goesBy", "pronunciation", "tags", "role", "lastInteractionAt", "warmth"].every((k) => k in (top?.person ?? {}))
+    && !("circle" in (top?.person ?? {}))
     && typeof top?.score === "number" && !("userId" in (top?.person ?? {})), Object.keys(top?.person ?? {}));
 
   // Facts and visits, by cosine. Trigram never reads either one, so a hit here
@@ -475,7 +474,7 @@ try {
   // tenant filter is to have a second tenant.
   otherUserId = randomUUID();
   await q("insert into users (id, name, email) values ($1, $2, $3)", [otherUserId, "Kith Test Other", `kith-test-${otherUserId}@example.invalid`]);
-  await q("insert into people (user_id, display_name, circle, tags, role) values ($1, $2, 'other', $3, $4)",
+  await q("insert into people (user_id, display_name, tags, role) values ($1, $2, $3, $4)",
     [otherUserId, "Kith Test Delta", [TAG], "belongs to the other account"]);
   const leak = await search("Kith Test Delta");
   check("another account's person never comes back", !leak.results.some((r) => /Delta/.test(r.person.displayName)), leak.results.map((r) => r.person.displayName));
@@ -531,14 +530,16 @@ try {
   const patch = (body, id = who.id) => page.request.patch(`${BASE}/api/v1/people/${id}`, { data: body });
   const readPerson = async () => (await (await page.request.get(`${BASE}/api/v1/people/${who.id}`)).json()).person;
   const wasPerson = await readPerson();
-  const edit = await patch({ displayName: `${who.displayName} Jr`, circle: "family", role: "changed by the live check", tags: [...wasPerson.tags, BRAND] });
+  const edit = await patch({ displayName: `${who.displayName} Jr`, cadenceDays: 7, role: "changed by the live check", tags: [...wasPerson.tags, BRAND] });
   check("PATCH /api/v1/people/:id is 200", edit.status() === 200, edit.status());
   const nowPerson = await readPerson();
-  check("name, circle, role and tags all moved",
-    nowPerson.displayName === `${who.displayName} Jr` && nowPerson.circle === "family"
+  check("name, role, tags and their own cadence all moved",
+    nowPerson.displayName === `${who.displayName} Jr` && nowPerson.cadenceDays === 7
     && nowPerson.tags.includes(BRAND) && /live check/.test(nowPerson.role ?? ""),
-    { name: nowPerson.displayName, circle: nowPerson.circle, tags: nowPerson.tags, role: nowPerson.role });
-  check("the cadence follows the circle it was moved to", nowPerson.cadenceDays === 14, [wasPerson.circle, wasPerson.cadenceDays, nowPerson.circle, nowPerson.cadenceDays]);
+    { name: nowPerson.displayName, cadence: nowPerson.cadenceDays, tags: nowPerson.tags, role: nowPerson.role });
+  check("a person's own cadence overrides the default", !nowPerson.cadenceIsDefault, nowPerson.cadenceIsDefault);
+  check("clearing it hands them back the default",
+    (await patch({ cadenceDays: null })).ok() && (await readPerson()).cadenceIsDefault);
   // An employer is a tag, which is the whole reason tags and not circles.
   check("a brand tag makes them findable by the brand", (await search(BRAND)).results.some((r) => r.person.id === who.id));
   await patch({ role: "" });
@@ -546,10 +547,11 @@ try {
   check("an unknown field is refused", (await patch({ nope: 1 })).status() === 400);
   check("an empty patch is refused", (await patch({})).status() === 400);
   check("a nameless person is refused", (await patch({ displayName: "   " })).status() === 400);
-  check("a malformed id is a 404", (await patch({ circle: "work" }, "not-a-uuid")).status() === 404);
-  check("someone else's id is a 404", (await patch({ circle: "work" }, "00000000-0000-4000-8000-00000000dead")).status() === 404);
+  check("a circle can no longer be set at all", (await patch({ circle: "work" })).status() === 400);
+  check("a malformed id is a 404", (await patch({ role: "x" }, "not-a-uuid")).status() === 404);
+  check("someone else's id is a 404", (await patch({ role: "x" }, "00000000-0000-4000-8000-00000000dead")).status() === 404);
   check("editing signed out is a 401",
-    (await (await browser.newContext()).request.patch(`${BASE}/api/v1/people/${who.id}`, { data: { circle: "work" } })).status() === 401);
+    (await (await browser.newContext()).request.patch(`${BASE}/api/v1/people/${who.id}`, { data: { role: "x" } })).status() === 401);
 
   // and the same thing with a thumb
   await page.goto(`${BASE}/people/${who.id}`, { waitUntil: "networkidle" });
@@ -559,7 +561,6 @@ try {
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${OUT}/14-person-edit.png`, fullPage: true });
   await page.locator(".pedit .field input").first().fill(`${who.displayName} Edited`);
-  await page.locator(".pedit .tabs button", { hasText: "Neighbors" }).click();
   await page.locator(".pedit .act", { hasText: "Save" }).click();
   // Wait for the new name rather than for a timer: the page reloads the row
   // before it leaves edit mode, and a fixed pause races that round trip.
@@ -568,9 +569,7 @@ try {
     `${who.displayName} Edited`, { timeout: 20000 },
   ).then(() => true).catch(() => false);
   await page.screenshot({ path: `${OUT}/15-person-edited.png`, fullPage: true });
-  check("the screen saved the name and the circle",
-    saved && /neighbors/i.test(await page.locator(".phead .meta").innerText()),
-    [saved, await page.locator(".pname").innerText().catch(() => null)]);
+  check("the screen saved the name", saved, [saved, await page.locator(".pname").innerText().catch(() => null)]);
 
   /* M. when you last saw them */
   // Last seen is the newest visit, not a number anyone sets, so these compare
@@ -688,12 +687,13 @@ try {
   check("the filter row keeps its own scroll instead of dragging the page",
     (await page.locator(".tabs").evaluate((el) => getComputedStyle(el).overscrollBehaviorX)) === "contain");
 
-  /* S. You: the account, the cadences, and getting your data out */
+  /* S. You: the account, the cadence, and getting your data out */
   const meRes = await page.request.get(`${BASE}/api/v1/me`);
   const me = await meRes.json();
   cadenceWas = me.cadence;
-  check("GET /api/v1/me is 200 with the account, the cadences and the counts", meRes.status() === 200
-    && ["name", "email", "timezone", "cadence", "connected", "counts"].every((k) => k in me), Object.keys(me));
+  check("GET /api/v1/me is 200 with the account, the cadence and the counts", meRes.status() === 200
+    && ["name", "email", "timezone", "cadence", "connected", "counts"].every((k) => k in me)
+    && typeof me.cadence === "number", { keys: Object.keys(me), cadence: me.cadence });
   check("me signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/me`)).status() === 401);
   const [dbCounts] = await q(`select
     (select count(*) from people where user_id = $1 and archived_at is null) people,
@@ -707,12 +707,11 @@ try {
     me.connected.calendar === /calendar/.test(acct?.s ?? "") && me.connected.contacts === /contacts/.test(acct?.s ?? ""),
     [me.connected, acct?.s]);
 
-  // A cadence is the one setting that rewrites what the app says about people.
-  const [warmBefore] = await q("select id, warmth from people where user_id = $1 and circle = 'other' and last_interaction_at is not null order by last_interaction_at limit 1", [user.id]);
-  const bumped = { ...me.cadence, other: 3 };
-  check("PATCH /api/v1/me is 200", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: bumped } })).status() === 200);
+  // The cadence is the one setting that rewrites what the app says about people.
+  const [warmBefore] = await q("select id, warmth from people where user_id = $1 and cadence_days is null and last_interaction_at is not null order by last_interaction_at limit 1", [user.id]);
+  check("PATCH /api/v1/me is 200", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: 3 } })).status() === 200);
   const [warmAfter] = await q("select warmth from people where id = $1", [warmBefore.id]);
-  check("changing a cadence rewrites every warmth it applies to",
+  check("changing the cadence rewrites every warmth it applies to",
     Number(warmAfter.warmth) !== Number(warmBefore.warmth), [warmBefore.warmth, warmAfter.warmth]);
   check("and the person page reads the new cadence",
     (await (await page.request.get(`${BASE}/api/v1/people/${warmBefore.id}`)).json()).person.cadenceDays === 3);
@@ -720,8 +719,8 @@ try {
   cadenceWas = null;
   const [warmBack] = await q("select warmth from people where id = $1", [warmBefore.id]);
   check("putting it back puts warmth back", Number(warmBack.warmth) === Number(warmBefore.warmth), [warmBefore.warmth, warmBack.warmth]);
-  check("a cadence of zero days is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: { other: 0 } } })).status() === 400);
-  check("an unknown circle is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: { golf: 10 } } })).status() === 400);
+  check("a cadence of zero days is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: 0 } })).status() === 400);
+  check("a cadence that is not a number is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: { other: 10 } } })).status() === 400);
   check("an unknown field is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { nope: 1 } })).status() === 400);
   check("editing the account signed out is a 401",
     (await (await browser.newContext()).request.patch(`${BASE}/api/v1/me`, { data: { timezone: "UTC" } })).status() === 401);
@@ -745,7 +744,7 @@ try {
   await page.waitForSelector(".cad", { timeout: 20000 });
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${OUT}/18-you.png`, fullPage: true });
-  check("You shows one cadence per circle", (await page.locator(".cad").count()) === 5);
+  check("You shows one cadence, not five", (await page.locator(".cad").count()) === 1);
   check("and the way out", (await page.locator("form button", { hasText: "Sign out" }).count()) === 1);
   check("the record screen no longer carries a stray sign out",
     (await page.goto(`${BASE}/record`, { waitUntil: "networkidle" }), await page.locator(".foot").count()) === 0);
@@ -762,7 +761,7 @@ try {
     // what recomputes the warmth the change rewrote.
     const put = await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: cadenceWas } })
       .then((r) => r.status()).catch(() => 0);
-    if (put !== 200) await q("update users set cadence_defaults = $2 where id = $1", [user.id, JSON.stringify(cadenceWas)]);
+    if (put !== 200) await q("update users set cadence_defaults = $2 where id = $1", [user.id, JSON.stringify({ everyone: cadenceWas })]);
     console.log(`cleanup: cadences restored${put === 200 ? " and warmth recomputed" : " in SQL; warmth needs a re-save on You"}`);
   }
   if (placeId) {

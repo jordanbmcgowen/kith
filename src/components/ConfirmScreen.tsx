@@ -4,12 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   store, ApiError,
-  type CaptureView, type FilingDecisions, type PersonLite, type Circle, type Suggestion, type ExtractionResult,
+  type CaptureView, type FilingDecisions, type PersonLite, type Suggestion, type ExtractionResult,
 } from "@/lib/store";
-import { CIRCLES, circleColor, initials } from "@/lib/circles";
 import { defaultDecisions, mergeTags } from "@/lib/decisions";
 import { AUTO_FILE_THRESHOLD } from "@/lib/ai/threshold";
-import { toDateInput, fromDateInput } from "@/lib/format";
+import { toDateInput, fromDateInput, initials } from "@/lib/format";
 import { BackLink as Back } from "./BackLink";
 import { TagAdder } from "./TagAdder";
 
@@ -323,7 +322,6 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   // Their page, once they have a row: the person they matched, or the row a filing created for this name.
   const pageId = dec.action === "drop" ? null : row ? row.id : createdId && rosterById.has(createdId) ? createdId : null;
   const role = (matched ? row.role : null) ?? p.role ?? null;
-  const circle: Circle = dec.circle ?? (matched ? row.circle : row?.circle ?? p.circle ?? "other");
   const out = dec.action === "drop";
   const status = statusOf(p, dec);
   const tags = dec.tags ?? [];
@@ -336,7 +334,7 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   return (
     <div className={`pb anim${out ? " out" : ""}`} style={style(index)}>
       <div className="row">
-        <span className="mark" style={{ "--c": circleColor(circle) } as CSSProperties}>{initials(name)}</span>
+        <span className="mark">{initials(name)}</span>
         <span className="body">
           {pageId ? <Link href={`/people/${pageId}`} className="nm nm-link">{name}</Link> : <span className="nm">{name}</span>}
           {role && <span className="role">{role}</span>}
@@ -358,21 +356,6 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
                 <button key={s.id} className="act gold" onClick={() => onPerson({ action: "match", personId: s.id })}>{s.displayName}</button>
               ))}
             </span>
-          )}
-          {!out && (
-            <div className="circles" role="group" aria-label={`Circle for ${name}`}>
-              {CIRCLES.map((k) => (
-                <button
-                  key={k.key}
-                  type="button"
-                  aria-pressed={circle === k.key}
-                  style={{ "--c": k.color } as CSSProperties}
-                  onClick={() => onPerson({ circle: k.key })}
-                >
-                  {k.label}
-                </button>
-              ))}
-            </div>
           )}
           {!out && (
             <div className="tags">
@@ -580,7 +563,7 @@ function KeptFromBefore({ x, decisions, view, rosterById, index }: {
       <div className="list" style={{ marginTop: 6 }}>
         {kept.map((p) => (
           <div key={p.id} className="row" style={{ padding: "12px 0" }}>
-            <span className="mark" style={{ "--c": circleColor(p.circle) } as CSSProperties}>{initials(p.displayName)}</span>
+            <span className="mark">{initials(p.displayName)}</span>
             <span className="body">
               <Link href={`/people/${p.id}`} className="nm nm-link">{p.displayName}</Link>
               {p.role && <span className="role">{p.role}</span>}
@@ -778,7 +761,7 @@ function PersonPicker({ roster, preferred, newName, onPick, onClose }: {
         )}
         {shown.map((p) => (
           <button key={p.id} className="row" type="button" onClick={() => onPick(p.id)}>
-            <span className="mark" style={{ "--c": circleColor(p.circle) } as CSSProperties}>{initials(p.displayName)}</span>
+            <span className="mark">{initials(p.displayName)}</span>
             <span className="body">
               <span className="nm" style={{ fontSize: 14 }}>{p.displayName}</span>
               {p.role && <span className="role">{p.role}</span>}

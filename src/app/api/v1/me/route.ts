@@ -2,22 +2,19 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { route } from "@/lib/api";
 import { db, users, accounts, people, facts, interactions, threads, places, captures, looseThreads } from "@/db";
-import { CADENCE_DEFAULTS } from "@/lib/warmth";
+import { cadenceOf, DEFAULT_CADENCE_DAYS } from "@/lib/warmth";
 import { refreshEveryone } from "@/lib/people";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-
-/** The five circles, in the order the app shows them. */
-const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
 
 /**
  * GET /api/v1/me
  *
  * Who you are, what Kith is holding, and the one setting that changes what the
- * app says about people: how often you want to keep up, per circle. That
- * number decides who Today calls slipping and how warmth reads, and until now
- * it lived only in the database with nowhere to see it. A judgment you cannot
- * see is not one you can argue with.
+ * app says about people: how often you want to keep up. That number decides
+ * who Today calls slipping and how warmth reads, and until recently it lived
+ * only in the database with nowhere to see it. A judgment you cannot see is
+ * not one you can argue with.
  *
  * "Connected" is derived from the scopes Google actually granted, never from a
  * list of what we hope is on.
@@ -54,7 +51,7 @@ export const GET = route(async () => {
     image: me.image,
     timezone: me.timezone,
     since: me.createdAt.toISOString(),
-    cadence: { ...CADENCE_DEFAULTS, ...(me.cadenceDefaults ?? {}) },
+    cadence: cadenceOf(me.cadenceDefaults),
     /** Only what Google actually granted. Nothing here is aspirational. */
     connected: {
       google: true,
@@ -67,17 +64,17 @@ export const GET = route(async () => {
 
 const MePatch = z.object({
   timezone: z.string().trim().min(1).max(60).optional(),
-  /** Days between visits, per circle. One to a year: anything else is a typo. */
-  cadence: z.record(z.enum(CIRCLES), z.number().int().min(1).max(365)).optional(),
+  /** Days between visits. One to a year: anything else is a typo. */
+  cadence: z.number().int().min(1).max(365).optional(),
 }).strict();
 
 /**
  * PATCH /api/v1/me
  *
- * Changing a cadence changes what keeping up means for everyone who inherits
- * it, and warmth is stored rather than worked out on read, so every person is
- * recomputed here. Otherwise the meters would go on describing the old answer
- * until each person happened to be written again.
+ * Changing the cadence changes what keeping up means for everyone who has not
+ * been given their own, and warmth is stored rather than worked out on read,
+ * so every person is recomputed here. Otherwise the meters would go on
+ * describing the old answer until each person happened to be written again.
  */
 export const PATCH = route(async (req: Request) => {
   const userId = await requireUser();
@@ -93,9 +90,9 @@ export const PATCH = route(async (req: Request) => {
   const me = await d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } });
   if (!me) return NextResponse.json({ error: "No account" }, { status: 404 });
 
-  const cadence = body.cadence
-    ? { ...CADENCE_DEFAULTS, ...(me.cadenceDefaults ?? {}), ...body.cadence }
-    : undefined;
+  // One key from here on. The old per-circle keys are dropped rather than kept
+  // alongside, so nothing can read a stale bucket later.
+  const cadence = body.cadence ? { everyone: body.cadence } : undefined;
 
   await d.update(users).set({
     ...(body.timezone ? { timezone: body.timezone } : {}),

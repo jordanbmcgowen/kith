@@ -102,7 +102,7 @@ async function main() {
     /* ---- fixtures: one known person, one open thread, one known place ---- */
     const GOLF = `${MARK} Golf`;
     const [marcus] = await db().insert(people).values({
-      userId, displayName: `${MARK} Marcus Ellery`, goesBy: "Marcus", circle: "friends", role: "golf, flies a Cirrus", tags: [GOLF],
+      userId, displayName: `${MARK} Marcus Ellery`, goesBy: "Marcus", role: "golf, flies a Cirrus", tags: [GOLF],
     }).returning();
     const [openThread] = await db().insert(threads).values({
       userId, personId: marcus.id, title: `${MARK} send Marcus the Cirrus article`,
@@ -123,7 +123,7 @@ async function main() {
       people: [
         // Lowercase on purpose: it must land as the spelling Marcus already has, plus one new tag.
         { matchedPersonId: marcus.id, name: "Marcus", confidence: 0.96, isNew: false, tags: [GOLF.toLowerCase(), `${MARK} Board`] },
-        { matchedPersonId: null, name: DEV, confidence: 0.9, isNew: true, circle: "neighbors", role: "runs a coffee roaster in Bishop Arts", tags: [`${MARK} Bishop Arts`] },
+        { matchedPersonId: null, name: DEV, confidence: 0.9, isNew: true, role: "runs a coffee roaster in Bishop Arts", tags: [`${MARK} Bishop Arts`] },
       ],
       facts: [
         { personName: "Marcus", kind: "relation", content: "Daughter Priya, got into Rice early decision", confidence: 0.95 },
@@ -157,7 +157,7 @@ async function main() {
     check("place visit count incremented 3 -> 4", clubAfter?.visitCount === 4, clubAfter?.visitCount);
 
     const [dev] = await peopleNamed(userId, DEV);
-    check("new person created with circle", dev?.circle === "neighbors", dev?.circle);
+    check("new person created with the tag the note proposed", dev?.tags?.some((t) => t.includes("Bishop Arts")), dev?.tags);
     check("new person carries the proposed tag", JSON.stringify(dev?.tags) === JSON.stringify([`${MARK} Bishop Arts`]), dev?.tags);
     const marcusTagged = await db().query.people.findFirst({ where: eq(people.id, marcus.id) });
     check("matched person keeps his tag in its own spelling and gains the new one",
@@ -246,7 +246,7 @@ async function main() {
     check("confirming again changes nothing: still 1 fact, 1 interaction", (await factsOf(c4.id)).length === 1 && (await interactionsOf(c4.id)).length === 1);
 
     /* ---- 9. a waiting note confirmed with fixes, then fixed again ---- */
-    console.log("\n9. waiting note filed with edits: circle, dropped fact, attached and dismissed loose threads, cleared place");
+    console.log("\n9. waiting note filed with edits: tags, dropped fact, attached and dismissed loose threads, cleared place");
     const DEV2 = `${MARK} Dev Patel 2`;
     const [c9] = await db().insert(captures).values({
       userId, kind: "text", status: "uploaded", rawText: `${MARK} met another Dev`,
@@ -254,7 +254,7 @@ async function main() {
     }).returning();
     const extraction9: Extraction = {
       ...empty,
-      people: [{ matchedPersonId: null, name: DEV2, confidence: 0.5, isNew: true, circle: "other", role: "the other Dev" }],
+      people: [{ matchedPersonId: null, name: DEV2, confidence: 0.5, isNew: true, role: "the other Dev" }],
       facts: [
         { personName: DEV2, kind: "context", content: "Keep this one", confidence: 0.9 },
         { personName: DEV2, kind: "context", content: "Drop this one", confidence: 0.9 },
@@ -269,7 +269,7 @@ async function main() {
 
     const decisions9: FilingDecisions = {
       ...defaultDecisions(extraction9, club.id),
-      people: [{ action: "new", personId: null, circle: "work", tags: [`${MARK} Work Group`, ` ${MARK} work group `] }],
+      people: [{ action: "new", personId: null, tags: [`${MARK} Work Group`, ` ${MARK} work group `] }],
       facts: [{ keep: true }, { keep: false }],
       unresolved: [{ personId: marcus.id, dismissed: false }, { personId: null, dismissed: true }],
       place: { placeId: null, name: null },
@@ -279,7 +279,7 @@ async function main() {
     const after9b = await captureRow(c9.id);
     const f9 = await factsOf(c9.id);
     const loose9 = await looseOf(c9.id);
-    check("new person created with the chosen circle", dev2?.circle === "work", dev2?.circle);
+    check("new person created with the typed tags, one spelling", dev2?.tags?.filter((t) => /work group/i.test(t)).length === 1, dev2?.tags);
     check("typed tags: trimmed, one spelling, no duplicate", JSON.stringify(dev2?.tags) === JSON.stringify([`${MARK} Work Group`]), dev2?.tags);
     check("dropped fact stayed out; attached loose thread became a fact on Marcus",
       f9.length === 2 && f9.some((x) => x.personId === dev2?.id && x.content === "Keep this one") && f9.some((x) => x.personId === marcus.id && x.kind === "context" && x.content.includes("loose a")),
@@ -299,11 +299,11 @@ async function main() {
     check("only the attached fact on Marcus remains; the interaction is gone", f9b.length === 1 && f9b[0].personId === marcus.id && (await interactionsOf(c9.id)).length === 0, f9b.length);
 
     console.log("   ...then brought back as new, twice");
-    const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, circle: "work", tags: [] }] };
+    const back: FilingDecisions = { ...after9b!.filing!.decisions!, people: [{ action: "new", personId: dev2.id, tags: [] }] };
     await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
     await fileCapture({ userId, captureId: c9.id, decisions: back, by: "user", embed });
     const dev2s = await peopleNamed(userId, DEV2);
-    check("exactly one row again, with its circle", dev2s.length === 1 && dev2s[0].circle === "work", dev2s.length);
+    check("exactly one row again", dev2s.length === 1, dev2s.length);
     check("an empty tag list on the screen clears the tags", dev2s[0]?.tags.length === 0, dev2s[0]?.tags);
     check("2 facts, 1 interaction, 2 loose, no duplicates", (await factsOf(c9.id)).length === 2 && (await interactionsOf(c9.id)).length === 1 && (await looseOf(c9.id)).length === 2);
 
@@ -373,7 +373,9 @@ async function main() {
     /* ---- 13. warmth follows the interaction's date, not the note's ---- */
     console.log("\n13. a note today about a meeting 200 days ago");
     const OLD = `${MARK} Old Friend`;
-    const [old] = await db().insert(people).values({ userId, displayName: OLD, circle: "friends" }).returning();
+    // Their own cadence, so the check does not read whatever the account's
+    // default happens to be. Circles used to supply this and no longer do.
+    const [old] = await db().insert(people).values({ userId, displayName: OLD, cadenceDays: 21 }).returning();
     const then = new Date(Date.now() - 200 * 86_400_000);
     const [c13] = await db().insert(captures).values({ userId, kind: "text", status: "uploaded", rawText: `${MARK} old meeting`, capturedAt: new Date() }).returning();
     await processCapture({ captureId: c13.id, userId }, env, models({
@@ -383,7 +385,7 @@ async function main() {
     }));
     const oldAfter = await db().query.people.findFirst({ where: eq(people.id, old.id) });
     check("last seen is the meeting's date", !!oldAfter?.lastInteractionAt && Math.abs(oldAfter.lastInteractionAt.getTime() - then.getTime()) < 60_000, oldAfter?.lastInteractionAt);
-    check("warmth reflects 200 days of silence", (oldAfter?.warmth ?? 100) < 20, oldAfter?.warmth);
+    check("warmth reflects 200 days of silence against their own 21 days", (oldAfter?.warmth ?? 100) < 20, oldAfter?.warmth);
 
     /* ---- 6. a typed place name finds an existing place, fuzzily ---- */
     console.log("\n6. typed place, lowercase and partial, matches the known club");

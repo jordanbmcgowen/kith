@@ -91,3 +91,10 @@ export function fromDateInput(v: string): string | null {
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
+
+/** "Marcus Ellery" -> "ME", "Dre" -> "D". Squared, like a card index. */
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((w) => w[0]).join("");
+  return (letters || "?").toUpperCase();
+}

@@ -1,10 +1,9 @@
 "use client";
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { store, ApiError, type PersonView, type PersonPatch, type Circle } from "@/lib/store";
-import { CIRCLES, circleColor, circleLabel, initials } from "@/lib/circles";
+import { store, ApiError, type PersonView, type PersonPatch } from "@/lib/store";
 import { mergeTags } from "@/lib/decisions";
-import { daysSince, fmtChannel, fmtDay, fmtDue, excerpt, toDateInput, fromDateInput } from "@/lib/format";
+import { daysSince, fmtChannel, fmtDay, fmtDue, excerpt, toDateInput, fromDateInput, initials } from "@/lib/format";
 import { BackLink } from "./BackLink";
 import { PEOPLE_VIEW_KEY } from "./PeopleScreen";
 import { sayOf } from "./PersonRow";
@@ -68,7 +67,6 @@ export function PersonScreen({ id }: { id: string }) {
   if (!view) return backLink;
 
   const { person: p, facts, threads, places, notes } = view;
-  const c = circleColor(p.circle);
   const say = sayOf(p);
   const role = p.role ?? [p.title, p.company].filter(Boolean).join(", ") ?? null;
   const days = daysSince(p.lastInteractionAt);
@@ -89,13 +87,12 @@ export function PersonScreen({ id }: { id: string }) {
         />
       ) : (
         <div className="phead anim" style={style(1)}>
-          <span className="mark lg" style={{ "--c": c } as CSSProperties}>{initials(p.displayName)}</span>
+          <span className="mark lg">{initials(p.displayName)}</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 className="pname">{p.displayName}</h1>
             {say && <div className="say" style={{ marginTop: 7 }}>{say}</div>}
             {role && <div className="role" style={{ marginTop: 7 }}>{role}</div>}
             <div className="meta" style={{ marginTop: 10 }}>
-              <span className="circ"><span className="sq" style={{ "--c": c } as CSSProperties} />{circleLabel(p.circle)}</span>
               {p.tags.map((t) => <span key={t} className="tg">{t}</span>)}
               <button className="act" onClick={openEditor}>Edit</button>
             </div>
@@ -115,7 +112,7 @@ export function PersonScreen({ id }: { id: string }) {
           <span className="sk">Your cadence</span>
         </div>
         <div className="stat">
-          <span className="meter" style={{ "--c": c, "--v": p.warmth } as CSSProperties} role="img" aria-label={`Warmth ${p.warmth} of 100`}><i /></span>
+          <span className="meter" style={{ "--v": p.warmth } as CSSProperties} role="img" aria-label={`Warmth ${p.warmth} of 100`}><i /></span>
           <span className="sk">Warmth</span>
         </div>
       </div>
@@ -172,7 +169,7 @@ export function PersonScreen({ id }: { id: string }) {
         )}
         {history.length > 0 && (
           <div className="tl">
-            {history.map((e) => <Visit key={e.id} e={e} color={c} index={n++} personId={p.id} onChanged={reload} />)}
+            {history.map((e) => <Visit key={e.id} e={e} index={n++} personId={p.id} onChanged={reload} />)}
           </div>
         )}
       </section>
@@ -208,7 +205,7 @@ export function PersonScreen({ id }: { id: string }) {
           <div className="list">
             {places.map((pl) => (
               <div key={pl.id} className="row anim" style={style(n++, { padding: "12px 0" })}>
-                <span className="sq" style={{ "--c": c, marginTop: 6 } as CSSProperties} />
+                <span className="sq" style={{ marginTop: 6 }} />
                 <span className="body">
                   <span style={{ fontSize: 13.5 }}>{pl.name}</span>
                   <span className="meta">
@@ -241,13 +238,13 @@ function visits(view: PersonView): Entry[] {
  * A visit with no note behind it has nowhere else to be fixed, so it carries
  * its own date and a way to remove it.
  */
-function Visit({ e, color, index, personId, onChanged }: {
-  e: Entry; color: string; index: number; personId: string; onChanged: () => Promise<unknown>;
+function Visit({ e, index, personId, onChanged }: {
+  e: Entry; index: number; personId: string; onChanged: () => Promise<unknown>;
 }) {
   const [day, setDay] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const when = [fmtDay(new Date(e.at).toISOString()), e.channel].filter(Boolean).join(" / ");
-  const s = style(index, { "--c": color } as CSSProperties);
+  const s = style(index);
 
   if (e.noteId) {
     return (
@@ -335,13 +332,16 @@ function VisitLogger({ personId, onDone, onCancel }: { personId: string; onDone:
 
 /**
  * Who someone is, editable in place. Their name, how you say it, what they
- * are to you, their circle, and their tags.
+ * are to you, their tags, and how often you want to see them.
  *
- * Tags are where employers live. Circles are fixed at five and set the
- * cadence, so a company cannot be one: you would lose every previous employer
- * the day someone changes jobs, which is the opposite of the point. A tag list
- * holds Yum and Neighborly at once, and "everyone I know at Neighborly" stays
- * a question you can ask.
+ * Tags are the only grouping in the app, and they are yours: Kith invented
+ * five circles once and sixty of sixty-one people landed in "other", which is
+ * what an invented group looks like. A tag list holds Yum and Neighborly at
+ * once, so "everyone I know at Neighborly" stays a question you can ask after
+ * someone changes jobs.
+ *
+ * The cadence here overrides your default for this one person. It is what
+ * Today means by slipping, so it is set where you can see who it is about.
  *
  * Facts, visits and threads are not editable here. Those are derived from
  * notes, so the place to correct one is the note it came from, where the
@@ -357,7 +357,7 @@ function PersonEditor({ person, pool, onClose, onSaved }: {
   const [goesBy, setGoesBy] = useState(person.goesBy ?? "");
   const [saying, setSaying] = useState(person.pronunciation ?? "");
   const [role, setRole] = useState(person.role ?? "");
-  const [circle, setCircle] = useState<Circle>(person.circle);
+  const [cadence, setCadence] = useState(person.cadenceIsDefault ? "" : String(person.cadenceDays));
   const [tags, setTags] = useState<string[]>(person.tags);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -369,7 +369,7 @@ function PersonEditor({ person, pool, onClose, onSaved }: {
       goesBy: goesBy.trim() || null,
       pronunciation: saying.trim() || null,
       role: role.trim() || null,
-      circle,
+      cadenceDays: cadence.trim() ? Number(cadence) : null,
       tags,
     };
     if (!patch.displayName) { setProblem("A name is the one thing it needs."); return; }
@@ -403,11 +403,17 @@ function PersonEditor({ person, pool, onClose, onSaved }: {
         <input value={role} onChange={(e) => setRole(e.target.value)} maxLength={200} placeholder="Two doors down, the blue house" autoComplete="off" />
       </label>
 
-      <div className="tabs circle-row" style={{ marginTop: 16 }} role="group" aria-label="Circle">
-        {CIRCLES.map((x) => (
-          <button key={x.key} type="button" aria-pressed={circle === x.key} onClick={() => setCircle(x.key)}>{x.label}</button>
-        ))}
-      </div>
+      <label className="cad" style={{ marginTop: 4 }}>
+        <span className="cad-name">See them every</span>
+        <input
+          type="number" min={1} max={365} inputMode="numeric" placeholder={String(person.cadenceDays)}
+          value={cadence} onChange={(e) => setCadence(e.target.value)}
+        />
+        <span className="cad-unit">days</span>
+      </label>
+      <p className="lede" style={{ paddingTop: 8 }}>
+        Blank keeps your default of {person.cadenceDays} days.
+      </p>
 
       <div className="meta" style={{ marginTop: 14 }}>
         {tags.map((t) => (

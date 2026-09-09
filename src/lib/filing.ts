@@ -18,7 +18,7 @@ import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   db, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
-  type ExtractionResult, type CaptureFiling, type FilingDecisions, type Circle,
+  type ExtractionResult, type CaptureFiling, type FilingDecisions,
 } from "../db";
 import { warmth, cadenceFor } from "./warmth";
 import { resolvePlaceByName } from "./places";
@@ -33,7 +33,6 @@ export const NEW_PEOPLE_REVIEW_AT = 3;
 /** Kinds worth surfacing first on a person. Matches the old worker. */
 const PINNED_KINDS = new Set(["relation", "identity", "sensitive"]);
 
-const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
 const uuid = z.string().uuid();
 
 /** The request body of the confirm endpoint. Same shape as FilingDecisions in the schema. */
@@ -41,7 +40,6 @@ export const DecisionsSchema = z.object({
   people: z.array(z.object({
     action: z.enum(["match", "new", "drop"]),
     personId: uuid.nullable(),
-    circle: z.enum(CIRCLES).optional(),
     tags: z.array(z.string().trim().min(1).max(40)).max(8).optional(),
   })),
   // `text` and the dates are the user's corrections. Absent means the model's
@@ -166,7 +164,7 @@ export async function fileCapture(o: {
 
   const roster = await d.query.people.findMany({
     where: eq(people.userId, userId),
-    columns: { id: true, displayName: true, circle: true, tags: true, cadenceDays: true, googleContactId: true },
+    columns: { id: true, displayName: true, tags: true, cadenceDays: true, googleContactId: true },
     orderBy: (p, { asc }) => asc(p.createdAt),
   });
   const rosterById = new Map(roster.map((p) => [p.id, p]));
@@ -197,7 +195,6 @@ export async function fileCapture(o: {
   const dropped = new Set<string>();
   const used = new Set<string>();
   const created: CaptureFiling["created"] = [];
-  const circleChanges = new Map<string, Circle>();
   const tagChanges = new Map<string, string[]>();
 
   for (const [i, p] of x.people.entries()) {
@@ -219,10 +216,9 @@ export async function fileCapture(o: {
         const [row] = await d.insert(people).values({
           userId,
           displayName: p.name,
-          circle: dec.circle ?? p.circle ?? "other",
           tags: normalizeTags(dec.tags ?? p.tags ?? []),
           role: p.role ?? null,
-        }).returning({ id: people.id, displayName: people.displayName, circle: people.circle, tags: people.tags, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
+        }).returning({ id: people.id, displayName: people.displayName, tags: people.tags, cadenceDays: people.cadenceDays, googleContactId: people.googleContactId });
         personId = row.id;
         rosterById.set(row.id, row);
       }
@@ -233,7 +229,6 @@ export async function fileCapture(o: {
     if (dec.action === "new" || previous.created.some((c) => c.personId === personId)) {
       if (!created.some((c) => c.personId === personId)) created.push({ name: p.name, personId });
     }
-    if (dec.circle && rosterById.get(personId)!.circle !== dec.circle) circleChanges.set(personId, dec.circle);
     if (dec.tags) {
       const final = normalizeTags(dec.tags);
       if (!sameTags(final, rosterById.get(personId)!.tags)) tagChanges.set(personId, final);
@@ -248,14 +243,10 @@ export async function fileCapture(o: {
   };
   await d.update(captures).set({ filing: interim }).where(eq(captures.id, captureId));
 
-  for (const personId of new Set([...circleChanges.keys(), ...tagChanges.keys()])) {
-    const circle = circleChanges.get(personId);
-    const tags = tagChanges.get(personId);
-    await d.update(people).set({ ...(circle ? { circle } : {}), ...(tags ? { tags } : {}), updatedAt: new Date() })
+  for (const [personId, tags] of tagChanges) {
+    await d.update(people).set({ tags, updatedAt: new Date() })
       .where(and(eq(people.id, personId), eq(people.userId, userId)));
-    const row = rosterById.get(personId)!;
-    if (circle) row.circle = circle;
-    if (tags) row.tags = tags;
+    rosterById.get(personId)!.tags = tags;
   }
 
   /* 2. place ------------------------------------------------------------ */

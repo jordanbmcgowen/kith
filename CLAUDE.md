@@ -104,7 +104,7 @@ Built, step 3 of the build order (the confirmation screen):
 - `src/lib/filing.ts`: filing is its own module, called by the worker and by
   the confirm endpoint with the same code. It takes the extraction stored on
   the capture plus `FilingDecisions` (per person: match, new, or drop, plus
-  circle; per fact, interaction, follow-up: keep or drop; per loose thread:
+  tags; per fact, interaction, follow-up: keep or drop; per loose thread:
   attach or dismiss; place: keep, name, or clear) and writes the rows. It
   records what it did in `captures.filing` (the people it created, the people
   it touched, the decisions), so running it again replaces instead of
@@ -121,7 +121,7 @@ Built, step 3 of the build order (the confirmation screen):
   processor's fetch handler answers `POST /embed` with its own OpenAI key,
   and has no public hostname. Model keys live on the processor only.
 - `src/components/ConfirmScreen.tsx` at `/notes/[id]`: the prototype's
-  "Here's what I got", one block per person with the circle as one tap, the
+  "Here's what I got", one block per person with their tags under them, the
   facts under each person with drop and undo, loose threads with attach and
   dismiss, the place, then File it (waiting) or Done (filed). Tapping a
   Recent row opens it. `ReviewCount` in the status bar reads "2 to review"
@@ -133,7 +133,8 @@ Built, step 3 of the build order (the confirmation screen):
   passing, but every bare name on a list) and what confidence means for a new
   person (that they are distinct from every candidate).
 - Tags. `people.tags` is the user's own words for the groups a person belongs
-  to ("YoungLife", "Journeymen"). Circles stay the fixed five. The model gets
+  to ("YoungLife", "Journeymen"). Circles were removed later; see "Groups are
+  the user's tags, and nothing else" below. The model gets
   the user's existing tags and each candidate's, proposes tags per person
   from the note's own headings and phrasing, and filing keeps one spelling
   per tag. A decision's `tags` is the person's complete list; the screen
@@ -154,17 +155,17 @@ Built, step 4 of the build order (person detail, read only):
 - `GET /api/v1/people` grew a `tag` filter (case-insensitive) and returns
   the user's tags, most used first, and roster counts beside the rows, both
   unfiltered so the filter row holds still. Sorted by last seen, newest
-  first, then never-seen people by name. An unknown circle is a 400.
-- `store.people({ circle, tag })` and `store.person(id)` in both stores;
+  first, then never-seen people by name.
+- `store.people({ tag })` and `store.person(id)` in both stores;
   `PersonRow`, `PeopleList`, `PersonView` in `src/lib/store.ts`.
 - `src/components/PeopleScreen.tsx` at `/people`: the prototype's underline
-  filters for circle, all six words (Other included, since that is where
-  most people start), and a second row for tags. Both live in the URL. The
+  filters, one row: Everyone and then the user's own tags. It lives in the
+  URL. (It started as two rows, circles above tags; see below.) The
   list remembers its query in `sessionStorage` (`kith:people`) so the
   person page's back link returns to the same view. Location never narrows
   this list; when places exist it will only reorder it.
 - `src/components/PersonScreen.tsx` at `/people/[id]`: initials, name,
-  pronunciation or goes-by, role, circle, tags; since seen ("none yet"
+  pronunciation or goes-by, role, tags; since seen ("none yet"
   without a visit), your cadence, warmth as the 2px meter and never a
   number; Remember first; Open threads (no checkbox until marking done
   arrives); History, which is visits only, each opening its note; Notes,
@@ -263,27 +264,23 @@ Jordan used the app and two things came back. Both are built.
   deployment: a note saying someone "just moved to Brightwater Logistics from
   Halloway Foods" now tags them with both.
 - `PATCH /api/v1/people/:id` and an editor on a person's page: name, goes by,
-  pronunciation, who they are, circle, tags. Strict body; an empty string
-  clears a field; tags keep one spelling; warmth is recomputed after, because
-  the circle sets the cadence warmth is read against. That is what lets the
+  pronunciation, who they are, tags, and their own cadence. Strict body; an
+  empty string clears a field; tags keep one spelling; warmth is recomputed
+  after, because the cadence is what warmth is read against. That is what lets the
   existing roster get brand tags without re-recording a note about each person.
   Facts, visits and threads are deliberately NOT editable there: they come
   from notes, and the note is where a correction survives a re-file.
 - `src/components/TagAdder.tsx` is shared by the confirmation screen and the
   person page, so a tag is added one way.
 - **One filter row, not two.** Circles and tags were two rows of the same
-  underlined words, and four of the six circle words returned nothing because
-  60 of 61 people are in Other. Now `GET /api/v1/people` returns `circles`,
-  only the ones that hold someone, and the screen draws one row: Everyone, then
-  those circles, then the tags. One filter at a time; a circle and a tag
-  narrowing each other was a question nobody was asking. Both still live in the
-  URL, so old links keep working.
+  underlined words. This was the first step; circles went entirely soon after,
+  so the row is now Everyone plus the user's tags. The tag lives in the URL.
 - **When you last saw them.** `POST /api/v1/people/:id/visits` logs a visit on
   a chosen day, `PATCH`/`DELETE .../visits/:id` move or remove one. "Saw them"
   sits in the History block. Last seen and warmth are never set directly: they
   are read back out of the interactions table by `refreshPerson` in
-  `src/lib/people.ts`, which every write that touches a visit or a circle calls
-  afterwards, so the two numbers cannot drift from the visits they describe.
+  `src/lib/people.ts`, which every write that touches a visit or a cadence
+  calls afterwards, so the two numbers cannot drift from the visits they describe.
   A visit that came from a note is not editable there, and says so: changing it
   on the person page would be undone by the next re-file, silently. The note is
   where those are corrected, and the visit links to it.
@@ -318,15 +315,39 @@ Jordan used the app and two things came back. Both are built.
 - Row-shaped links (`a.row`, `a.thread`, `a.loose`) carry no underline: the row
   is the affordance. Underlines belong to `.act` and `.link`, which are words
   you press.
+- **Groups are the user's tags, and nothing else.** Circles are gone from the
+  whole app: the five words on the review screen, the filter row, the person
+  page and its editor, the colour behind a person's initials, the extraction
+  prompt, `FilingDecisions`, and every API that returned one. Jordan asked for
+  it after seeing FAMILY FRIENDS WORK NEIGHBORS OTHER still sitting under every
+  person on the review screen, and the data had already made the case: sixty of
+  sixty-one people were in "other", so four of the five words described nobody
+  and the fifth described everybody.
+  - `people.circle` is **retained in the schema, unused and unwritten**. It is
+    a NOT NULL enum with a default, so dropping it is a migration; nothing
+    reads it. Do not start reading it again.
+  - Cadence was the one thing circles really did: `users.cadenceDefaults` held
+    five numbers, one per circle. It is one number now, under the key
+    `everyone`. `cadenceOf` and `cadenceFor` in `warmth.ts` read `everyone`,
+    then fall back to the old `other` key, so an account written before the
+    change keeps the answer it had without a migration.
+  - What circles gave in granularity, `people.cadenceDays` gives better: a
+    number on the one person who needs it, set on their own page, blank to
+    inherit. `PATCH /api/v1/people/:id` takes `cadenceDays` where it used to
+    take `circle`.
+  - `GET /api/v1/people?circle=` is ignored rather than a 400: old links and
+    old `sessionStorage` entries should not error, they should just show
+    everyone.
+  - `src/lib/circles.ts` is deleted; `initials` moved to `format.ts`.
 - **You, rebuilt rather than ported.** The prototype's You was four toggles for
   Google Contacts, Google Calendar, Location and Push. Three of those switch
   things that do not exist, and Location is a browser permission the app does
   not own, so porting it would have shipped a screen of dead switches. What is
   there instead is what is real:
-  - **The cadences.** `users.cadenceDefaults` is read in five places, decides
-    who Today calls slipping and how warmth orders every list, and had nowhere
-    to be seen. It is on screen and editable now. A judgment the user cannot
-    see is not one they can argue with.
+  - **The cadence.** `users.cadenceDefaults` decides who Today calls slipping
+    and how warmth orders every list, and had nowhere to be seen. It is on
+    screen and editable now, as one number. A judgment the user cannot see is
+    not one they can argue with.
   - `PATCH /api/v1/me` calls `refreshEveryone` in `src/lib/people.ts`: warmth is
     stored, not derived on read, so changing a cadence has to rewrite every
     meter it applies to or they go on describing the old answer. Two reads and
@@ -476,8 +497,9 @@ link before designing any screen. Tokens:
 --rule-2:#294740
 --gold:#E8B33F     the app's own voice: live, matched, primary action
 --alert:#FF6B4A    OVERDUE ONLY. never decorative, never anything else.
---clay:#C9856B family   --verdigris:#4FB39E friends
---sky:#6D9FD8 work      --wisteria:#B58AD4 neighbors
+--clay --verdigris --sky --wisteria   coloured the five circles. Circles are
+                                      gone. Only verdigris is still used (the
+                                      "why" line); the rest wait for a use.
 ```
 
 Type: **Fraunces** for names and headings, **Schibsted Grotesk** for interface
@@ -488,8 +510,9 @@ Hard rules. Breaking one of these is a bug, not a preference:
 
 - **No cards.** List items are rows on the ground separated by 1px hairlines.
   No fills, no borders around content, no elevation.
-- **No colored left rails.** A person's circle reads as a 6px square beside
-  their name and as the fill behind their square initials.
+- **No colored left rails**, and no colour that means a group. The app has no
+  groups of its own to signal: a person's initials square is one colour for
+  everyone. Their tags are their groups, and tags are words.
 - **border-radius: 0** everywhere except the record button and the mic button,
   which are circles because a circle means "press me."
 - **No pill chips.** Filters are text with an animated underline on the active

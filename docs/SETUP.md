@@ -139,13 +139,14 @@ Build in this order. Do not skip ahead; each step is testable on its own.
 3. **Confirmation screen.** Built. Tap a note in Recent to open it at
    `/notes/<id>`. A note whose people all cleared the confidence line filed
    itself and shows what landed; anything less certain waited, and File it
-   commits it. Every fix is a tap: someone else, leave out, a circle, drop a
-   fact, attach or dismiss a loose thread, clear the place. Filing from the
+   commits it. Every fix is a tap: someone else, leave out, a tag, drop a
+   fact, attach or dismiss a loose thread, clear the place. The words the
+   model wrote are tappable too: change them, Done. Filing from the
    app embeds what it writes by asking the processor over the `PROCESSOR`
    service binding, so no model key lives on the app. "Read it again"
    re-runs extraction on a note and stops at needs review.
-4. **Person detail.** Built. The People tab lists everyone, narrowed by
-   circle or by one of your tags. A person's page shows what to remember
+4. **Person detail.** Built. The People tab lists everyone, narrowed by one of
+   your tags. A person's page shows what to remember
    first, open threads, visits, the notes behind them, and the places you
    see them. Read only for now; every visit and note opens the note it came
    from.

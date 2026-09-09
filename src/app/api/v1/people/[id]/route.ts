@@ -2,16 +2,13 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { route, isUuid } from "@/lib/api";
 import { db, users, people, facts, interactions, threads, places, personPlaces, captures, looseThreads } from "@/db";
-import { cadenceFor, CADENCE_DEFAULTS } from "@/lib/warmth";
+import { cadenceFor } from "@/lib/warmth";
 import { mergeTags } from "@/lib/decisions";
 import { refreshPerson } from "@/lib/people";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-/** Must match the `circle_kind` enum in src/db/schema.ts. */
-const CIRCLES = ["family", "friends", "work", "neighbors", "other"] as const;
 
 /**
  * What a person's page lets you change. Every field is optional: a PATCH says
@@ -28,7 +25,8 @@ const PersonPatch = z.object({
   pronouns: z.string().trim().max(40).nullish(),
   role: z.string().trim().max(200).nullish(),
   company: z.string().trim().max(120).nullish(),
-  circle: z.enum(CIRCLES).optional(),
+  /** Days between visits for this one person. Null hands them back your default. */
+  cadenceDays: z.number().int().min(1).max(365).nullable().optional(),
   /** The complete list after this edit, not an addition. One spelling per tag. */
   tags: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
 }).strict();
@@ -36,11 +34,12 @@ const PersonPatch = z.object({
 /**
  * PATCH /api/v1/people/:id
  *
- * Edit who someone is: their name, how you say it, what they are to you,
- * their circle, and their tags. Tags are where employers live, which is what
- * makes "everyone I know at Neighborly" a thing you can ask for. A circle is
- * one of five and sets the cadence, so warmth is recomputed after any change
- * rather than left saying something that is no longer true.
+ * Edit who someone is: their name, how you say it, what they are to you, their
+ * tags, and how often you want to see them. Tags are the only grouping in the
+ * app and are where employers live, which is what makes "everyone I know at
+ * Neighborly" a thing you can ask for. A cadence set here overrides your
+ * default for this one person, so warmth is recomputed after any change rather
+ * than left saying something that is no longer true.
  */
 export const PATCH = route(async (req: Request, ctx: Ctx) => {
   const userId = await requireUser();
@@ -58,7 +57,7 @@ export const PATCH = route(async (req: Request, ctx: Ctx) => {
   const d = db();
   const before = await d.query.people.findFirst({
     where: and(eq(people.id, id), eq(people.userId, userId)),
-    columns: { id: true, circle: true, cadenceDays: true },
+    columns: { id: true, cadenceDays: true },
   });
   if (!before) return NextResponse.json({ error: "No one here" }, { status: 404 });
 
@@ -71,13 +70,13 @@ export const PATCH = route(async (req: Request, ctx: Ctx) => {
     ...(body.pronouns !== undefined ? { pronouns: blankToNull(body.pronouns) } : {}),
     ...(body.role !== undefined ? { role: blankToNull(body.role) } : {}),
     ...(body.company !== undefined ? { company: blankToNull(body.company) } : {}),
-    ...(body.circle !== undefined ? { circle: body.circle } : {}),
+    ...(body.cadenceDays !== undefined ? { cadenceDays: body.cadenceDays } : {}),
     ...(body.tags !== undefined ? { tags: mergeTags([], body.tags) } : {}),
     updatedAt: new Date(),
   };
 
   await d.update(people).set(patch).where(and(eq(people.id, id), eq(people.userId, userId)));
-  // The circle sets the cadence, and warmth is read against the cadence.
+  // Warmth is read against the cadence, so it moves when the cadence does.
   await refreshPerson(userId, id);
   return NextResponse.json({ ok: true });
 });
@@ -150,7 +149,7 @@ export const GET = route(async (_req: Request, ctx: Ctx) => {
   return NextResponse.json({
     person: {
       ...rest,
-      cadenceDays: cadenceFor(person, prefs?.cadenceDefaults ?? CADENCE_DEFAULTS),
+      cadenceDays: cadenceFor(person, prefs?.cadenceDefaults ?? {}),
       cadenceIsDefault: cadenceDays == null,
     },
     facts: factRows,

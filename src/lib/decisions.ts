@@ -16,7 +16,7 @@ export function defaultDecisions(
   return {
     people: x.people.map((p) => p.matchedPersonId
       ? { action: "match", personId: p.matchedPersonId, tags: mergeTags(tagsOf(p.matchedPersonId), p.tags ?? []) }
-      : { action: "new", personId: null, ...(p.circle ? { circle: p.circle } : {}), tags: mergeTags([], p.tags ?? []) }),
+      : { action: "new", personId: null, tags: mergeTags([], p.tags ?? []) }),
     facts: x.facts.map(() => ({ keep: true })),
     interactions: x.interactions.map(() => ({ keep: true })),
     threads: x.threads.map(() => ({ keep: true })),

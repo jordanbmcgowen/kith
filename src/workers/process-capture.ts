@@ -184,7 +184,6 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
     id: p.id,
     displayName: p.displayName,
     goesBy: p.goesBy,
-    circle: p.circle,
     role: p.role,
     tags: p.tags,
     nearHere: nearIds.has(p.id),

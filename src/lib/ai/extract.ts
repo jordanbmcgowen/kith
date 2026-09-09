@@ -17,7 +17,6 @@ export const ExtractionSchema = z.object({
     name: z.string(),
     confidence: z.number().min(0).max(1),
     isNew: z.boolean(),
-    circle: z.enum(["family", "friends", "work", "neighbors", "other"]).optional(),
     role: z.string().optional(),
     tags: z.array(z.string()).optional(),
   })),
@@ -55,7 +54,6 @@ export type Candidate = {
   id: string;
   displayName: string;
   goesBy: string | null;
-  circle: string;
   role: string | null;
   tags: string[];
   nearHere: boolean;
@@ -207,7 +205,6 @@ const TOOL_SCHEMA = {
           name: { type: "string" },
           confidence: { type: "number" },
           isNew: { type: "boolean" },
-          circle: { type: "string", enum: ["family", "friends", "work", "neighbors", "other"] },
           role: { type: "string" },
           tags: { type: "array", items: { type: "string" } },
         },

@@ -31,7 +31,7 @@ src/
   app/api/v1/*            the API. versioned, so an Expo app can reuse it
   app/record/             the capture screen (step 2 of the build order)
   app/notes/[id]/         the confirmation screen (step 3)
-  app/people/             the people list, by circle and tag (step 4)
+  app/people/             the people list, by tag (step 4)
   app/people/[id]/        the person page, read only (step 4)
   app/find/               search, names and memories together (step 5)
   app/today/              the home screen: owed, slipping, loose, who is near
@@ -103,9 +103,13 @@ npm run dev
   visit, so the way to correct it is to correct the visits. "Saw them" logs one
   on a chosen day; a visit that came from a note is corrected on that note,
   where the correction survives a re-file.
-- **Employers are tags, not circles.** A circle holds one value and sets the
-  cadence; a tag list holds every company someone has worked at. "Everyone I
-  know at Neighborly" stays a question you can ask after they change jobs.
+- **The only groups are yours.** Kith once had five circles of its own, and
+  sixty of sixty-one people landed in "other". They are gone. `people.tags` is
+  the grouping: free text, proposed by extraction from your own words and
+  confirmed with a tap. A person can carry every company they have worked at,
+  so "everyone I know at Neighborly" stays a question you can ask after they
+  move on. How often to keep up is one number, plus a number on anyone who
+  needs their own.
 - **You can take it all with you.** Every row exports as one JSON file, and the
   cadences that decide who counts as slipping are on screen and editable. A
   private memory system you cannot leave is a worse deal than a notebook.
@@ -116,11 +120,8 @@ npm run dev
   right.
 - **Confidence below 0.82 goes to review, and files nothing until you tap.**
   Silent wrong filing is worse than a confirmation tap. A note that would add
-  three or more people at once waits too, so a pasted roster lands with
-  circles set instead of as a pile of "other".
-- **Circles are fixed, tags are yours.** Five circles order the app. Tags
-  (`people.tags`) are free text for the groups you actually move in, proposed
-  by extraction from your own words and confirmed with a tap.
+  three or more people at once waits too, so a pasted roster lands tagged
+  instead of as a pile of strangers.
 - **Every query is scoped by `userId`.** `scoped()` in `src/db/index.ts` is there
   to make the tenant filter hard to forget as the route count grows.
 - **No LiveKit.** There is no realtime audio between people here, only one-way

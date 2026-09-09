@@ -25,12 +25,29 @@ export function warmth(opts: {
   return Math.round(Math.max(0, Math.min(100, base + consistency)));
 }
 
-/** Days between visits, per circle, until the user tunes them. Mirrors the default on users.cadenceDefaults. */
-export const CADENCE_DEFAULTS: Record<string, number> = { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
+/**
+ * Days between visits, until you say otherwise. One number, not five.
+ *
+ * This used to be a cadence per circle, and circles are gone: they were five
+ * buckets the app imposed, and a roster of sixty-one people put sixty of them
+ * in "other", which is what a bucket looks like when it is not describing
+ * anything. Groups are the user's own tags now, and how often to keep up is
+ * one default plus a number on any person who deserves their own.
+ */
+export const DEFAULT_CADENCE_DAYS = 60;
+
+/** Accounts written before circles were removed carry the five keys. */
+export type CadenceDefaults = { everyone?: number } & Record<string, number>;
 
 export function cadenceFor(
-  person: { cadenceDays: number | null; circle: string },
-  defaults: Record<string, number>,
+  person: { cadenceDays: number | null },
+  defaults: CadenceDefaults,
 ): number {
-  return person.cadenceDays ?? defaults[person.circle] ?? 60;
+  // `other` is the bridge: it is where almost everyone already was, so an
+  // account that has not been re-saved yet keeps the answer it had.
+  return person.cadenceDays ?? defaults.everyone ?? defaults.other ?? DEFAULT_CADENCE_DAYS;
 }
+
+/** The one number, however the account happens to have it stored. */
+export const cadenceOf = (defaults: CadenceDefaults | null | undefined): number =>
+  defaults?.everyone ?? defaults?.other ?? DEFAULT_CADENCE_DAYS;

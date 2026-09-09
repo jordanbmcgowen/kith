@@ -33,7 +33,7 @@ export const GET = route(async (_req: Request, ctx: Ctx) => {
   const [roster, place, closes, suggestions] = await Promise.all([
     db().query.people.findMany({
       where: and(eq(people.userId, userId), isNull(people.archivedAt)),
-      columns: { id: true, displayName: true, goesBy: true, circle: true, role: true, tags: true },
+      columns: { id: true, displayName: true, goesBy: true, role: true, tags: true },
       orderBy: (p, { asc }) => asc(p.displayName),
       limit: 500,
     }),

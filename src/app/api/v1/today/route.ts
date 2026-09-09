@@ -4,7 +4,7 @@ import { route } from "@/lib/api";
 import { db, users, people, places, personPlaces, threads, looseThreads, captures } from "@/db";
 import { and, eq, desc, asc, sql, isNull, inArray } from "drizzle-orm";
 import { bbox, haversineM, locationBoost } from "@/lib/geo";
-import { cadenceFor, CADENCE_DEFAULTS } from "@/lib/warmth";
+import { cadenceFor } from "@/lib/warmth";
 
 /**
  * GET /api/v1/today?lat=&lng=
@@ -32,7 +32,7 @@ export const GET = route(async (req: Request) => {
     d.query.users.findFirst({ where: eq(users.id, userId), columns: { name: true, cadenceDefaults: true } }),
     d.select({
       id: people.id, displayName: people.displayName, goesBy: people.goesBy, pronunciation: people.pronunciation,
-      circle: people.circle, tags: people.tags, role: people.role,
+      tags: people.tags, role: people.role,
       lastInteractionAt: people.lastInteractionAt, warmth: people.warmth, cadenceDays: people.cadenceDays,
     }).from(people).where(and(eq(people.userId, userId), isNull(people.archivedAt))).limit(1000),
     d.select({
@@ -56,7 +56,7 @@ export const GET = route(async (req: Request) => {
   ]);
 
   const byId = new Map(roster.map((p) => [p.id, p]));
-  const defaults = me?.cadenceDefaults ?? CADENCE_DEFAULTS;
+  const defaults = me?.cadenceDefaults ?? {};
 
   // Who you are probably standing near, and why.
   const links = near.length
@@ -117,11 +117,11 @@ export const GET = route(async (req: Request) => {
 /** The people list's row shape, so Today and People draw the same person. */
 function row(p: {
   id: string; displayName: string; goesBy: string | null; pronunciation: string | null;
-  circle: string; tags: string[]; role: string | null; lastInteractionAt: Date | null; warmth: number;
+  tags: string[]; role: string | null; lastInteractionAt: Date | null; warmth: number;
 }) {
   return {
     id: p.id, displayName: p.displayName, goesBy: p.goesBy, pronunciation: p.pronunciation,
-    circle: p.circle, tags: p.tags, role: p.role,
+    tags: p.tags, role: p.role,
     lastInteractionAt: p.lastInteractionAt?.toISOString() ?? null, warmth: p.warmth,
   };
 }

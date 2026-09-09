@@ -74,6 +74,9 @@ export const users = pgTable("users", {
   image: text("image"),
   timezone: text("timezone").default("America/Chicago").notNull(),
   // Defaults the user can tune per circle, in days.
+  // One number, under the key `everyone`. Accounts written before circles were
+  // removed carry the five circle keys instead; `cadenceOf` in warmth.ts reads
+  // either, so the old default below stays valid and needs no migration.
   cadenceDefaults: jsonb("cadence_defaults")
     .$type<Record<string, number>>()
     .default({ family: 14, friends: 21, work: 45, neighbors: 30, other: 90 })
@@ -143,6 +146,10 @@ export const people = pgTable("people", {
   pronunciation: text("pronunciation"),          // "MAR-kus ELL-er-ee"
   pronouns: text("pronouns"),
 
+  // Retained, unused, and no longer written. Circles were five buckets the app
+  // imposed; sixty of sixty-one people landed in "other", which is what a
+  // bucket looks like when it is not describing anything. Groups are the
+  // user's own tags now. Dropping the column is a migration for another day.
   circle: circleEnum("circle").default("other").notNull(),
   // The user's own words for the groups this person belongs to: "YoungLife",
   // "Journeymen", "Brook Hollow". Proposed by extraction from the note's own
@@ -404,8 +411,6 @@ export type FilingDecisions = {
     action: "match" | "new" | "drop";
     /** The existing person for "match"; for "new", the row a previous filing created, if any. */
     personId: string | null;
-    /** Set the person's circle. Absent leaves it alone. */
-    circle?: Circle;
     /** The person's complete tag list after this note. Absent leaves it alone. */
     tags?: string[];
   }[];

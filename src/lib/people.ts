@@ -1,5 +1,5 @@
 import { db, users, people, interactions } from "@/db";
-import { cadenceFor, CADENCE_DEFAULTS, warmth as computeWarmth } from "@/lib/warmth";
+import { cadenceFor, warmth as computeWarmth } from "@/lib/warmth";
 import { and, eq, sql } from "drizzle-orm";
 
 /**
@@ -8,15 +8,15 @@ import { and, eq, sql } from "drizzle-orm";
  * so the two numbers can never drift from the visits they describe. A re-file
  * that replaces a visit lands on the same answer as adding one by hand.
  *
- * Warmth also depends on the cadence, which the circle sets, so changing
- * someone's circle goes through here too.
+ * Warmth is read against the cadence, so changing a person's own cadence, or
+ * the default behind it, goes through here too.
  */
 export async function refreshPerson(userId: string, personId: string): Promise<void> {
   const d = db();
   const [person, prefs, agg] = await Promise.all([
     d.query.people.findFirst({
       where: and(eq(people.id, personId), eq(people.userId, userId)),
-      columns: { circle: true, cadenceDays: true },
+      columns: { cadenceDays: true },
     }),
     d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } }),
     d.execute(sql`
@@ -33,7 +33,7 @@ export async function refreshPerson(userId: string, personId: string): Promise<v
       lastInteractionAt: last,
       warmth: computeWarmth({
         lastInteractionAt: last,
-        cadenceDays: cadenceFor(person, prefs?.cadenceDefaults ?? CADENCE_DEFAULTS),
+        cadenceDays: cadenceFor(person, prefs?.cadenceDefaults ?? {}),
         interactionsLast90: Number(a?.recent ?? 0),
       }),
       updatedAt: new Date(),
@@ -42,8 +42,8 @@ export async function refreshPerson(userId: string, personId: string): Promise<v
 }
 
 /**
- * The same recompute, for everyone at once. Changing a circle's cadence
- * changes what "keeping up" means for every person who inherits it, and warmth
+ * The same recompute, for everyone at once. Changing your cadence changes what
+ * "keeping up" means for every person who inherits it, and warmth
  * is stored rather than derived on read, so it has to be rewritten or the
  * meters go on describing the old answer.
  *
@@ -55,7 +55,7 @@ export async function refreshEveryone(userId: string): Promise<number> {
   const [prefs, rows] = await Promise.all([
     d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } }),
     d.execute(sql`
-      select p.id, p.circle, p.cadence_days,
+      select p.id, p.cadence_days,
              max(i.occurred_at) as last,
              count(i.id) filter (where i.occurred_at > now() - interval '90 days') as recent
       from ${people} p
@@ -64,13 +64,13 @@ export async function refreshEveryone(userId: string): Promise<number> {
       group by p.id`),
   ]);
 
-  const defaults = prefs?.cadenceDefaults ?? CADENCE_DEFAULTS;
-  const next = (rows.rows as { id: string; circle: string; cadence_days: number | null; last: string | Date | null; recent: unknown }[])
+  const defaults = prefs?.cadenceDefaults ?? {};
+  const next = (rows.rows as { id: string; cadence_days: number | null; last: string | Date | null; recent: unknown }[])
     .map((r) => ({
       id: r.id,
       warmth: computeWarmth({
         lastInteractionAt: r.last ? new Date(r.last) : null,
-        cadenceDays: cadenceFor({ cadenceDays: r.cadence_days, circle: r.circle }, defaults),
+        cadenceDays: cadenceFor({ cadenceDays: r.cadence_days }, defaults),
         interactionsLast90: Number(r.recent ?? 0),
       }),
     }));
