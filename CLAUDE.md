@@ -402,6 +402,35 @@ Jordan used the app and two things came back. Both are built.
   - `scripts/pipeline-check.ts` section 14 is the regression: a filing whose
     embed throws still leaves the capture knowing every row it made, and the
     retry reuses them instead of doubling them.
+- **Tapping a tab.** Jordan said the tabs were slow. Measured before changing
+  anything: from a datacenter, People 519ms and the others 210-230ms, and from
+  a phone on cellular roughly double. It was two round trips with nothing on
+  screen between them (the route, then the screen's own fetch on mount) plus a
+  third for the review count, because the strip remounts on every navigation.
+  - `src/lib/store.ts` holds every read for 30 seconds and every write empties
+    the lot, so a tab already opened paints from memory. Two components asking
+    at once share one request. Not held: the captures list and one note, which
+    poll while a note is in the pipeline; a cache there freezes the thing it
+    is watching.
+  - `reviewQueue` takes `{ fresh: true }`. Held for the remount, asked again on
+    the two occasions the count actually changes: the tab coming back, and a
+    note being filed. A count that does not fall when you file is wrong.
+  - `TabBar` warms the other tabs once the current screen has settled, and
+    prefetches their routes, which Next does not do for dynamic routes unless
+    told to.
+  - Now: Today 64ms, Find 66ms, You 58ms, People 206ms, and no API call at all
+    on any tap.
+  - **Backed out, and do not try it again without driving it.** Moving the
+    signed-in routes under a shared layout in a route group made a tap cost no
+    network whatsoever (58-104ms everywhere) because the session check and the
+    strip survived navigation. It broke the back button: going back from a
+    person page *while it was still loading* changed the URL to `/find?q=` and
+    left the person on screen, permanently. Not a flake, and it never
+    recovered. The same check passes 3/3 without the route group and fails 3/4
+    with it, on the deployment; it does not reproduce in `next dev`.
+    `experimental.staleTimes` was tried alongside it and went with it. The
+    note is in `next.config.ts`. To drive it: tap a person, then go back
+    before their page has settled.
 - **You, rebuilt rather than ported.** The prototype's You was four toggles for
   Google Contacts, Google Calendar, Location and Push. Three of those switch
   things that do not exist, and Location is a browser permission the app does
@@ -500,6 +529,9 @@ saves it.
   reasons it was.
 - Neon's HTTP driver has no interactive transactions, so a route that writes N
   rows one at a time is N chances to be cancelled halfway. Batch the insert.
+- Every screen fetches on mount, so any change that makes screens remount more
+  often costs a round trip you will not see in a page-load number. The store's
+  own cache is what makes that cheap; check it before adding another fetch.
 - Whisper mangles unusual names unless you pass the contact list as a prompt
   hint. That is already wired in `transcribe.ts`. Do not remove it.
 - Calendar and Contacts read are **sensitive** scopes: 100-user cap until

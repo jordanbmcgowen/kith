@@ -130,6 +130,10 @@ npm run dev
   Silent wrong filing is worse than a confirmation tap. A note that would add
   three or more people at once waits too, so a pasted roster lands tagged
   instead of as a pile of strangers.
+- **A tab you have already opened paints from memory.** Reads are held for
+  thirty seconds in the store and every write empties them, so moving between
+  tabs costs no network at all. The two reads that poll are deliberately not
+  held: a cache over the thing you are watching freezes it.
 - **Anything that writes rows records that it wrote them first.** Filing tells
   the capture which people it is about to create, generating their ids itself,
   then creates them in one statement. A write that dies halfway and leaves no
