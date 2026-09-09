@@ -13,15 +13,19 @@ export function ReviewCount() {
 
   useEffect(() => {
     let alive = true;
-    const load = () => { store.reviewQueue().then((q) => { if (alive) setQueue(q); }).catch(() => { /* the bar stays quiet */ }); };
-    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    // Mounting is cheap: this remounts on every navigation, and the store
+    // holds the answer. The two refreshes below are the ones that matter, and
+    // they ask again rather than take what is held.
+    const load = (fresh = false) => { store.reviewQueue({ fresh }).then((q) => { if (alive) setQueue(q); }).catch(() => { /* the bar stays quiet */ }); };
+    const again = () => load(true);
+    const onVisible = () => { if (document.visibilityState === "visible") again(); };
     load();
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("kith:captures", load);
+    window.addEventListener("kith:captures", again);
     return () => {
       alive = false;
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("kith:captures", load);
+      window.removeEventListener("kith:captures", again);
     };
   }, []);
 

@@ -205,7 +205,7 @@ export type Store = {
   /** Put a note back through extraction. It stops at needs_review. */
   rerun(id: string): Promise<void>;
   /** How many notes are waiting for a look, and the oldest one. */
-  reviewQueue(): Promise<{ count: number; oldestId: string | null }>;
+  reviewQueue(opts?: { fresh?: boolean }): Promise<{ count: number; oldestId: string | null }>;
   /** The people list, narrowed by tag. */
   people(filter?: PeopleFilter): Promise<PeopleList>;
   /** One person with everything the person page shows. 404 becomes an ApiError. */
@@ -486,6 +486,70 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+/* ───────────────────────────── reads, remembered ─────────────────────────
+   A tab you have already opened should paint from memory, not from Dallas.
+
+   Every screen fetched on mount, so moving between tabs meant a round trip
+   for the page and another for its data, with nothing on screen in between.
+   The rows themselves change only when the user changes them, so the reads
+   are held for half a minute and every write empties the lot. Stale by a few
+   seconds is not a risk here; stale across a write would be, and cannot
+   happen.
+
+   It lives in module scope, so it survives moving between tabs and does not
+   survive a reload. Both are what you want.
+
+   Not cached: the captures list and one note, which poll while a note is
+   moving through the pipeline. A cache there would freeze the thing it is
+   watching.                                                              */
+
+const READ_TTL_MS = 30_000;
+const remembered = new Map<string, { at: number; body: unknown }>();
+const inFlight = new Map<string, Promise<unknown>>();
+
+function held<T>(key: string, get: () => Promise<T>, fresh = false): Promise<T> {
+  const hit = remembered.get(key);
+  if (!fresh && hit && Date.now() - hit.at < READ_TTL_MS) return Promise.resolve(hit.body as T);
+  // Two components asking at once (a screen and the warming below) is one request.
+  const going = inFlight.get(key) as Promise<T> | undefined;
+  if (going && !fresh) return going;
+  const p = get().then(
+    (body) => { remembered.set(key, { at: Date.now(), body }); inFlight.delete(key); return body; },
+    (e) => { inFlight.delete(key); throw e; },
+  );
+  inFlight.set(key, p);
+  return p;
+}
+
+/** Called by every write. The screen after a write must show the write. */
+function forget() { remembered.clear(); inFlight.clear(); }
+
+/**
+ * Fill the cache for the tabs the user has not opened yet, once the screen
+ * they are on has settled. Without this the first tap on each tab still waits
+ * for a round trip; with it, every tap after the app loads is instant.
+ *
+ * Three GETs on an idle connection, at most once per cache lifetime. Today is
+ * warmed without coordinates, which is what its own first read asks for.
+ */
+let warmedAt = 0;
+export function warmTabs() {
+  if (typeof window === "undefined") return;
+  if (Date.now() - warmedAt < READ_TTL_MS) return;
+  warmedAt = Date.now();
+  const soon = (fn: () => void) =>
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(fn, { timeout: 2000 })
+      : window.setTimeout(fn, 600);
+  soon(() => {
+    const quiet = () => { /* warming is best effort; the screen reports its own errors */ };
+    void store.today(null).catch(quiet);
+    void store.people().catch(quiet);
+    void store.me().catch(quiet);
+    void store.reviewQueue().catch(quiet);
+  });
+}
+
 /** The last fix we got, so a second request can reuse it while asking for a fresh one. */
 let lastCoords: Coords | null = null;
 
@@ -517,6 +581,7 @@ const liveStore: Store = {
     }
     if (input.placeName?.trim()) form.append("place", input.placeName.trim());
     form.append("capturedAt", input.capturedAt.toISOString());
+    forget();
     return api("/api/v1/captures", { method: "POST", body: form });
   },
 
@@ -529,28 +594,37 @@ const liveStore: Store = {
   },
 
   confirm(id, decisions) {
+    forget();
     return api<{ counts: FilingCounts }>(`/api/v1/captures/${encodeURIComponent(id)}/confirm`, json(decisions));
   },
 
   async rerun(id) {
     await api(`/api/v1/captures/${encodeURIComponent(id)}/rerun`, { method: "POST" });
+    forget();
   },
 
-  async reviewQueue() {
-    // Newest first, so the oldest waiting note is the last one.
-    const rows = await api<{ captures: CaptureSummary[] }>("/api/v1/captures?status=needs_review").then((r) => r.captures);
-    return { count: rows.length, oldestId: rows.at(-1)?.id ?? null };
+  reviewQueue({ fresh = false } = {}) {
+    // The status bar is on every screen and remounts on every navigation, so
+    // this is the one read that fires on literally every tab tap. Held for
+    // that, and asked again whenever the bar itself wants to know: when the
+    // tab comes back, and while a note is moving through the pipeline. A
+    // count that does not fall when a note is filed is the wrong count.
+    return held("review", async () => {
+      // Newest first, so the oldest waiting note is the last one.
+      const rows = await api<{ captures: CaptureSummary[] }>("/api/v1/captures?status=needs_review").then((r) => r.captures);
+      return { count: rows.length, oldestId: rows.at(-1)?.id ?? null };
+    }, fresh);
   },
 
   people(filter = {}) {
     const qs = new URLSearchParams();
     if (filter.tag) qs.set("tag", filter.tag);
     const s = qs.toString();
-    return api<PeopleList>(`/api/v1/people${s ? `?${s}` : ""}`);
+    return held(`people:${s}`, () => api<PeopleList>(`/api/v1/people${s ? `?${s}` : ""}`));
   },
 
   person(id) {
-    return api<PersonView>(`/api/v1/people/${encodeURIComponent(id)}`);
+    return held(`person:${id}`, () => api<PersonView>(`/api/v1/people/${encodeURIComponent(id)}`));
   },
 
   search(q, coords) {
@@ -558,45 +632,51 @@ const liveStore: Store = {
     // Ranking only. The API never filters on this, and nothing is hidden
     // because of where the phone is standing.
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
-    return api<SearchResults>(`/api/v1/search?${qs}`);
+    // Backspacing to a query you just ran should not spend another embedding.
+    return held(`search:${qs}`, () => api<SearchResults>(`/api/v1/search?${qs}`));
   },
 
   async updatePerson(id, patch) {
     await api(`/api/v1/people/${encodeURIComponent(id)}`, { ...json(patch), method: "PATCH" });
+    forget();
   },
 
   async addVisit(personId, visit) {
     await api(`/api/v1/people/${encodeURIComponent(personId)}/visits`, json(visit));
+    forget();
   },
 
   async editVisit(personId, visitId, patch) {
     await api(`/api/v1/people/${encodeURIComponent(personId)}/visits/${encodeURIComponent(visitId)}`, { ...json(patch), method: "PATCH" });
+    forget();
   },
 
   async removeVisit(personId, visitId) {
     await api(`/api/v1/people/${encodeURIComponent(personId)}/visits/${encodeURIComponent(visitId)}`, { method: "DELETE" });
+    forget();
   },
 
   places(coords) {
     const qs = new URLSearchParams();
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
     const s = qs.toString();
-    return api<{ places: NearbyPlace[] }>(`/api/v1/places${s ? `?${s}` : ""}`).then((r) => r.places);
+    return held(`places:${s}`, () => api<{ places: NearbyPlace[] }>(`/api/v1/places${s ? `?${s}` : ""}`).then((r) => r.places));
   },
 
   today(coords) {
     const qs = new URLSearchParams();
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
     const s = qs.toString();
-    return api<TodayView>(`/api/v1/today${s ? `?${s}` : ""}`);
+    return held(`today:${s}`, () => api<TodayView>(`/api/v1/today${s ? `?${s}` : ""}`));
   },
 
   me() {
-    return api<Me>("/api/v1/me");
+    return held("me", () => api<Me>("/api/v1/me"));
   },
 
   async updateMe(patch) {
     await api("/api/v1/me", { ...json(patch), method: "PATCH" });
+    forget();
   },
 };
 

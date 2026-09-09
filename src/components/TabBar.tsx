@@ -1,14 +1,25 @@
 "use client";
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { warmTabs } from "@/lib/store";
 
 /**
  * The tab bar from the prototype: Today, People, the mic, Find, You. All five
  * go somewhere now. The mic is the one circle in the bar, because a circle
  * means "press me".
+ *
+ * It also warms the tabs it points at: `warmTabs` fills the cache with what
+ * those screens will ask for, once the current one has settled, so the first
+ * tap on each tab costs no round trip for its data.
+ *
+ * `prefetch` is explicit because these routes are dynamic: without it Next
+ * fetches nothing until you have already tapped, since there is no loading
+ * boundary to prefetch as far as.
  */
 export function TabBar() {
   const path = usePathname() ?? "";
+  useEffect(() => { warmTabs(); }, [path]);
   const current = path === "/people" || path.startsWith("/people/") ? "people"
     : path === "/find" ? "find"
     : path === "/today" ? "today"
@@ -17,19 +28,19 @@ export function TabBar() {
 
   return (
     <nav className="nav" aria-label="Kith">
-      <Link href="/today" className="nv" aria-current={current === "today" ? "true" : undefined}>
+      <Link href="/today" prefetch className="nv" aria-current={current === "today" ? "true" : undefined}>
         {HOME}<span className="nl">Today</span>
       </Link>
-      <Link href="/people" className="nv" aria-current={current === "people" ? "true" : undefined}>
+      <Link href="/people" prefetch className="nv" aria-current={current === "people" ? "true" : undefined}>
         {USERS}<span className="nl">People</span>
       </Link>
-      <Link href="/record" className="nv" aria-label="Record a note">
+      <Link href="/record" prefetch className="nv" aria-label="Record a note">
         <span className="nmic">{MIC}</span>
       </Link>
-      <Link href="/find" className="nv" aria-current={current === "find" ? "true" : undefined}>
+      <Link href="/find" prefetch className="nv" aria-current={current === "find" ? "true" : undefined}>
         {FIND}<span className="nl">Find</span>
       </Link>
-      <Link href="/you" className="nv" aria-current={current === "you" ? "true" : undefined}>
+      <Link href="/you" prefetch className="nv" aria-current={current === "you" ? "true" : undefined}>
         {YOU}<span className="nl">You</span>
       </Link>
     </nav>
