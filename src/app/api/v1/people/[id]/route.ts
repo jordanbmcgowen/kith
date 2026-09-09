@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { route, isUuid } from "@/lib/api";
 import { db, users, people, facts, interactions, threads, places, personPlaces, captures, looseThreads } from "@/db";
-import { cadenceFor, CADENCE_DEFAULTS, warmth as computeWarmth } from "@/lib/warmth";
+import { cadenceFor, CADENCE_DEFAULTS } from "@/lib/warmth";
 import { mergeTags } from "@/lib/decisions";
+import { refreshPerson } from "@/lib/people";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 
@@ -75,28 +76,9 @@ export const PATCH = route(async (req: Request, ctx: Ctx) => {
     updatedAt: new Date(),
   };
 
-  const [row] = await d.update(people).set(patch)
-    .where(and(eq(people.id, id), eq(people.userId, userId)))
-    .returning({ id: people.id, circle: people.circle, cadenceDays: people.cadenceDays, lastInteractionAt: people.lastInteractionAt });
-
-  // The cadence that applies may have moved, and warmth is read against it.
-  const [prefs, agg] = await Promise.all([
-    d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } }),
-    d.execute(sql`
-      select count(*) filter (where occurred_at > now() - interval '90 days') recent,
-             max(occurred_at) last
-      from ${interactions} where user_id = ${userId} and person_id = ${id}`),
-  ]);
-  const a = agg.rows[0] as { recent: unknown; last: string | Date | null };
-  const last = a?.last ? new Date(a.last) : row.lastInteractionAt;
-  await d.update(people)
-    .set({ warmth: computeWarmth({
-      lastInteractionAt: last,
-      cadenceDays: cadenceFor(row, prefs?.cadenceDefaults ?? CADENCE_DEFAULTS),
-      interactionsLast90: Number(a?.recent ?? 0),
-    }) })
-    .where(and(eq(people.id, id), eq(people.userId, userId)));
-
+  await d.update(people).set(patch).where(and(eq(people.id, id), eq(people.userId, userId)));
+  // The circle sets the cadence, and warmth is read against the cadence.
+  await refreshPerson(userId, id);
   return NextResponse.json({ ok: true });
 });
 

@@ -25,6 +25,7 @@ src/
   lib/filing.ts           extraction + decisions -> rows. worker and API share it
   lib/places.ts           a typed name or coordinates -> a places row
   lib/store.ts            the data seam: one constant picks demo or live
+  lib/people.ts           last seen and warmth, recomputed from the visits
   lib/recorder.ts         MediaRecorder + level meter, browser only
   lib/format.ts           dates and due lines as the people screens say them
   app/api/v1/*            the API. versioned, so an Expo app can reuse it
@@ -97,6 +98,10 @@ npm run dev
   and loose thread on the confirmation screen can be edited in place before it
   files. The transcript never changes: facts are derived, so fixing one is a
   re-file, and the corrected words are what get embedded.
+- **Last seen is never set, only computed.** It is the date of the most recent
+  visit, so the way to correct it is to correct the visits. "Saw them" logs one
+  on a chosen day; a visit that came from a note is corrected on that note,
+  where the correction survives a re-file.
 - **Employers are tags, not circles.** A circle holds one value and sets the
   cadence; a tag list holds every company someone has worked at. "Everyone I
   know at Neighborly" stays a question you can ask after they change jobs.

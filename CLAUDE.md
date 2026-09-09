@@ -248,6 +248,33 @@ Jordan used the app and two things came back. Both are built.
   from notes, and the note is where a correction survives a re-file.
 - `src/components/TagAdder.tsx` is shared by the confirmation screen and the
   person page, so a tag is added one way.
+- **One filter row, not two.** Circles and tags were two rows of the same
+  underlined words, and four of the six circle words returned nothing because
+  60 of 61 people are in Other. Now `GET /api/v1/people` returns `circles`,
+  only the ones that hold someone, and the screen draws one row: Everyone, then
+  those circles, then the tags. One filter at a time; a circle and a tag
+  narrowing each other was a question nobody was asking. Both still live in the
+  URL, so old links keep working.
+- **When you last saw them.** `POST /api/v1/people/:id/visits` logs a visit on
+  a chosen day, `PATCH`/`DELETE .../visits/:id` move or remove one. "Saw them"
+  sits in the History block. Last seen and warmth are never set directly: they
+  are read back out of the interactions table by `refreshPerson` in
+  `src/lib/people.ts`, which every write that touches a visit or a circle calls
+  afterwards, so the two numbers cannot drift from the visits they describe.
+  A visit that came from a note is not editable there, and says so: changing it
+  on the person page would be undone by the next re-file, silently. The note is
+  where those are corrected, and the visit links to it.
+- **Location, working.** `GET /api/v1/places?lat=&lng=` returns the places you
+  have already named, nearest first (bounding box, then real distance), or your
+  most-visited when there is no fix. The record screen offers them under Here
+  and Somewhere else as one tap, so the first visit to a place is typing and
+  every one after is a tap. Without that the place list never accumulates, and
+  with no places location can rank nothing. The Find screen now asks for a fix
+  once per visit and passes it to search, where it only ever reorders.
+- Still missing for location to feel automatic: `GOOGLE_PLACES_KEY` on
+  kith-processor, which turns coordinates alone into a named place. Jordan adds
+  it in the Cloudflare dashboard (Workers, kith-processor, Settings, Variables
+  and Secrets); nobody needs to paste it here.
 
 Not built yet:
 

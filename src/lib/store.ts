@@ -61,6 +61,8 @@ export type PeopleList = {
   people: PersonRow[];
   /** Every tag the user has, most used first, for the filter row. Whole roster, whatever the filter. */
   tags: string[];
+  /** Only the circles that hold someone, in circle order. Whole roster, whatever the filter. */
+  circles: Circle[];
   /** For the line under the heading. Whole roster, whatever the filter. */
   counts: { people: number; facts: number; places: number };
 };
@@ -126,6 +128,9 @@ export type PersonPatch = {
   tags?: string[];
 };
 
+/** A place you have already named. Nearest first when the phone has a fix. */
+export type NearbyPlace = { id: string; name: string; distanceM: number | null };
+
 /** An existing person whose name looks like one the model called new. */
 export type Suggestion = { id: string; displayName: string; role: string | null; similarity: number };
 
@@ -186,6 +191,13 @@ export type Store = {
   search(q: string, coords?: Coords | null): Promise<SearchResults>;
   /** Change who someone is. Tags are where employers live. */
   updatePerson(id: string, patch: PersonPatch): Promise<void>;
+  /** "I saw them, on this day." Last seen and warmth follow from the visits. */
+  addVisit(personId: string, visit: { occurredAt: string; summary?: string }): Promise<void>;
+  /** Only a visit that came from no note. A note's visit is corrected on the note. */
+  editVisit(personId: string, visitId: string, patch: { occurredAt?: string; summary?: string }): Promise<void>;
+  removeVisit(personId: string, visitId: string): Promise<void>;
+  /** Places you have already named, nearest first. Never throws on no fix. */
+  places(coords?: Coords | null): Promise<NearbyPlace[]>;
 };
 
 export class ApiError extends Error {
@@ -197,6 +209,7 @@ export class ApiError extends Error {
    anything. Every record carries _demo:true so one grep finds any that
    escaped. Nothing outside this block may reference a DEMO_ identifier.
    ══════════════════════════════════════════════════════════════════════════════════════════ */
+const CIRCLE_KEYS: Circle[] = ["family", "friends", "work", "neighbors", "other"];
 const DEMO_DAY = 86_400_000;
 const DEMO_AGO = (days: number) => new Date(Date.now() - days * DEMO_DAY).toISOString();
 const DEMO_PEOPLE: PersonRow[] = [
@@ -331,7 +344,12 @@ const demoStore: Store = {
       && (!tag || p.tags.some((t) => t.toLowerCase() === tag)));
     const facts = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.facts.length, 0);
     const places = Object.values(DEMO_DETAIL).reduce((n, d) => n + d.places.length, 0);
-    return { people: list, tags: [...new Set(DEMO_PEOPLE.flatMap((p) => p.tags))], counts: { people: DEMO_PEOPLE.length, facts, places } };
+    return {
+      people: list,
+      tags: [...new Set(DEMO_PEOPLE.flatMap((p) => p.tags))],
+      circles: CIRCLE_KEYS.filter((c) => DEMO_PEOPLE.some((p) => p.circle === c)),
+      counts: { people: DEMO_PEOPLE.length, facts, places },
+    };
   },
   async person(id) {
     const p = DEMO_PEOPLE.find((x) => x.id === id);
@@ -363,6 +381,30 @@ const demoStore: Store = {
     const p = DEMO_PEOPLE.find((x) => x.id === id);
     if (!p) throw new ApiError(404, "No one here");
     Object.assign(p, patch);
+  },
+  async addVisit(personId, visit) {
+    const p = DEMO_PEOPLE.find((x) => x.id === personId);
+    if (!p) throw new ApiError(404, "No one here");
+    const detail = (DEMO_DETAIL[personId] ??= { facts: [], threads: [], interactions: [], places: [], notes: [] });
+    detail.interactions.unshift({
+      id: `00000000-0000-4000-8000-${String(Date.now()).slice(-12)}`, occurredAt: visit.occurredAt,
+      channel: "in_person", summary: visit.summary || "Saw them.", captureId: null, place: null,
+    });
+    p.lastInteractionAt = visit.occurredAt;
+  },
+  async editVisit(personId, visitId, patch) {
+    const v = DEMO_DETAIL[personId]?.interactions.find((x) => x.id === visitId);
+    if (!v || v.captureId) throw new ApiError(404, "That visit came from a note. Change it there.");
+    Object.assign(v, patch.occurredAt ? { occurredAt: patch.occurredAt } : {}, patch.summary ? { summary: patch.summary } : {});
+  },
+  async removeVisit(personId, visitId) {
+    const detail = DEMO_DETAIL[personId];
+    const i = detail?.interactions.findIndex((x) => x.id === visitId && !x.captureId) ?? -1;
+    if (i < 0) throw new ApiError(404, "That visit came from a note. Change it there.");
+    detail.interactions.splice(i, 1);
+  },
+  async places() {
+    return Object.values(DEMO_DETAIL).flatMap((d) => d.places).map((p) => ({ id: p.id, name: p.name, distanceM: 120 }));
   },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
@@ -468,6 +510,25 @@ const liveStore: Store = {
 
   async updatePerson(id, patch) {
     await api(`/api/v1/people/${encodeURIComponent(id)}`, { ...json(patch), method: "PATCH" });
+  },
+
+  async addVisit(personId, visit) {
+    await api(`/api/v1/people/${encodeURIComponent(personId)}/visits`, json(visit));
+  },
+
+  async editVisit(personId, visitId, patch) {
+    await api(`/api/v1/people/${encodeURIComponent(personId)}/visits/${encodeURIComponent(visitId)}`, { ...json(patch), method: "PATCH" });
+  },
+
+  async removeVisit(personId, visitId) {
+    await api(`/api/v1/people/${encodeURIComponent(personId)}/visits/${encodeURIComponent(visitId)}`, { method: "DELETE" });
+  },
+
+  places(coords) {
+    const qs = new URLSearchParams();
+    if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
+    const s = qs.toString();
+    return api<{ places: NearbyPlace[] }>(`/api/v1/places${s ? `?${s}` : ""}`).then((r) => r.places);
   },
 };
 

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { store, ApiError, type PersonView, type PersonPatch, type Circle } from "@/lib/store";
 import { CIRCLES, circleColor, circleLabel, initials } from "@/lib/circles";
 import { mergeTags } from "@/lib/decisions";
-import { daysSince, fmtChannel, fmtDay, fmtDue, excerpt } from "@/lib/format";
+import { daysSince, fmtChannel, fmtDay, fmtDue, excerpt, toDateInput, fromDateInput } from "@/lib/format";
 import { BackLink } from "./BackLink";
 import { PEOPLE_VIEW_KEY } from "./PeopleScreen";
 import { sayOf } from "./PersonRow";
@@ -35,6 +35,7 @@ export function PersonScreen({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [back, setBack] = useState("/people");
   const [editing, setEditing] = useState(false);
+  const [logging, setLogging] = useState(false);
   /** Every tag the user has, for the suggestions under "+ tag". Fetched only when editing. */
   const [tagPool, setTagPool] = useState<string[]>([]);
 
@@ -82,7 +83,9 @@ export function PersonScreen({ id }: { id: string }) {
           person={p}
           pool={tagPool}
           onClose={() => setEditing(false)}
-          onSaved={async () => { setEditing(false); await reload(); }}
+          // Reload first, then close: leaving edit mode before the new row
+          // arrives shows the old name for as long as the round trip takes.
+          onSaved={async () => { await reload(); setEditing(false); }}
         />
       ) : (
         <div className="phead anim" style={style(1)}>
@@ -153,11 +156,23 @@ export function PersonScreen({ id }: { id: string }) {
       )}
 
       <section className="block">
-        <div className="label">History{history.length > 0 && <span className="n">{history.length}</span>}</div>
-        {history.length === 0 && <p className="lede" style={{ padding: "12px 0" }}>No visits noted yet.</p>}
+        <div className="label">
+          History{history.length > 0 && <span className="n">{history.length}</span>}
+          <button className="act" onClick={() => setLogging((v) => !v)}>{logging ? "Never mind" : "Saw them"}</button>
+        </div>
+        {logging && (
+          <VisitLogger
+            personId={p.id}
+            onDone={async () => { await reload(); setLogging(false); }}
+            onCancel={() => setLogging(false)}
+          />
+        )}
+        {history.length === 0 && !logging && (
+          <p className="lede" style={{ padding: "12px 0" }}>No visits noted yet. Saw them puts a date on it.</p>
+        )}
         {history.length > 0 && (
           <div className="tl">
-            {history.map((e) => <Visit key={e.id} e={e} color={c} index={n++} />)}
+            {history.map((e) => <Visit key={e.id} e={e} color={c} index={n++} personId={p.id} onChanged={reload} />)}
           </div>
         )}
       </section>
@@ -220,22 +235,102 @@ function visits(view: PersonView): Entry[] {
     .sort((a, b) => b.at - a.at);
 }
 
-function Visit({ e, color, index }: { e: Entry; color: string; index: number }) {
+/**
+ * One visit. A visit that came from a note opens that note, and is corrected
+ * there: changing it here would be undone the next time the note files again.
+ * A visit with no note behind it has nowhere else to be fixed, so it carries
+ * its own date and a way to remove it.
+ */
+function Visit({ e, color, index, personId, onChanged }: {
+  e: Entry; color: string; index: number; personId: string; onChanged: () => Promise<unknown>;
+}) {
+  const [day, setDay] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const when = [fmtDay(new Date(e.at).toISOString()), e.channel].filter(Boolean).join(" / ");
-  const inner = (
-    <>
-      <div className="ev-when">
-        {when}
-        {e.noteId && <span className="act">Open note</span>}
-      </div>
+  const s = style(index, { "--c": color } as CSSProperties);
+
+  if (e.noteId) {
+    return (
+      <Link href={`/notes/${e.noteId}`} className="ev anim" style={s}>
+        <div className="ev-when">{when}<span className="act">Open note</span></div>
+        <div className="ev-text">{e.text}</div>
+        {e.place && <div className="ev-place">{e.place}</div>}
+      </Link>
+    );
+  }
+
+  const commit = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try { await fn(); await onChanged(); } finally { setBusy(false); setDay(null); }
+  };
+
+  return (
+    <div className="ev anim" style={s}>
+      {day === null ? (
+        <div className="ev-when">
+          {when}
+          <button className="act" onClick={() => setDay(toDateInput(new Date(e.at).toISOString()))}>Change the day</button>
+          <button className="act" disabled={busy} onClick={() => commit(() => store.removeVisit(personId, e.id))}>Remove</button>
+        </div>
+      ) : (
+        <div className="ie-when" style={{ marginTop: 0 }}>
+          Seen
+          <input type="date" value={day} max={toDateInput(new Date().toISOString())} onChange={(ev) => setDay(ev.target.value)} />
+          <button className="act gold" disabled={busy || !day} onClick={() => {
+            const iso = fromDateInput(day);
+            if (iso) commit(() => store.editVisit(personId, e.id, { occurredAt: iso }));
+          }}>Done</button>
+          <button className="act" disabled={busy} onClick={() => setDay(null)}>Cancel</button>
+        </div>
+      )}
       <div className="ev-text">{e.text}</div>
       {e.place && <div className="ev-place">{e.place}</div>}
-    </>
+    </div>
   );
-  const s = style(index, { "--c": color } as CSSProperties);
-  return e.noteId
-    ? <Link href={`/notes/${e.noteId}`} className="ev anim" style={s}>{inner}</Link>
-    : <div className="ev anim" style={s}>{inner}</div>;
+}
+
+/**
+ * "I saw them, on this day." Last seen and warmth are read from the visits,
+ * so this is how you correct either: by correcting what they are computed
+ * from, never by overwriting the number itself.
+ */
+function VisitLogger({ personId, onDone, onCancel }: { personId: string; onDone: () => void | Promise<void>; onCancel: () => void }) {
+  const today = toDateInput(new Date().toISOString());
+  const [day, setDay] = useState(today);
+  const [line, setLine] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const save = async () => {
+    const iso = fromDateInput(day);
+    if (!iso) { setProblem("Pick a day."); return; }
+    setBusy(true);
+    setProblem(null);
+    try {
+      await store.addVisit(personId, { occurredAt: iso, ...(line.trim() ? { summary: line.trim() } : {}) });
+      await onDone();
+    } catch (e) {
+      setProblem(text(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="pedit" style={{ marginTop: 6 }}>
+      <div className="ie-when" style={{ marginTop: 0, padding: "12px 0" }}>
+        Seen
+        <input type="date" value={day} max={today} onChange={(e) => setDay(e.target.value)} />
+      </div>
+      <label className="field">
+        <input value={line} onChange={(e) => setLine(e.target.value)} maxLength={200} placeholder="What happened, if you want to say" autoComplete="off" />
+      </label>
+      {problem && <p className="why" style={{ color: "var(--alert)" }}>{problem}</p>}
+      <div className="meta" style={{ marginTop: 16, gap: 18 }}>
+        <button className="act gold" onClick={save} disabled={busy}>{busy ? "Saving" : "Save"}</button>
+        <button className="act" onClick={onCancel} disabled={busy}>Cancel</button>
+      </div>
+    </div>
+  );
 }
 
 /**

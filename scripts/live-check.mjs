@@ -386,9 +386,19 @@ try {
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${OUT}/09-people-tag.png`, fullPage: true });
   check("the list shows exactly this note's people under the tag", (await page.locator("a.row[href^='/people/']").count()) === createdIds.length, await page.locator("a.row[href^='/people/']").count());
-  check("the tag filter is underlined", (await page.locator(".tabs.sub button[aria-pressed='true']").innerText()).trim() === TAG);
+  check("the tag filter is underlined", (await page.locator(".tabs button[aria-pressed='true']").innerText()).trim() === TAG);
   check("the stamp counts the filtered view", /^\d+ of \d+/i.test((await page.locator(".stamp").first().innerText()).trim()), await page.locator(".stamp").first().innerText());
-  check("the circle row has six words", (await page.locator(".tabs.circle-row button").count()) === 6);
+  // One row, and only circles that actually hold someone: five words that
+  // return nothing are five words in the way.
+  const words = (await page.locator(".tabs button").allInnerTexts()).map((w) => w.trim().toLowerCase());
+  check("one filter row, not two", (await page.locator(".tabs").count()) === 1, await page.locator(".tabs").count());
+  check("it starts with Everyone, then the circles in use, then the tags",
+    words[0] === "everyone"
+    && tj.circles.every((c) => words.includes(c))
+    && tj.tags.every((t) => words.includes(t.toLowerCase()))
+    && words.length === 1 + tj.circles.length + tj.tags.length,
+    { words, circles: tj.circles, tags: tj.tags });
+  check("no circle in the row is empty", !words.includes("family") || tj.circles.includes("family"), tj.circles);
   check("tab bar: People is current and the mic goes to record", (await page.locator(".nav .nv[aria-current='true']").innerText()).trim().toLowerCase() === "people" && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
   check("tab bar: Today and You are the placeholders left", (await page.locator(".nav .nv.soon").count()) === 2 && (await page.locator(".nav a[href='/find']").count()) === 1);
 
@@ -548,18 +558,87 @@ try {
   await page.locator(".pedit .field input").first().fill(`${who.displayName} Edited`);
   await page.locator(".pedit .tabs button", { hasText: "Neighbors" }).click();
   await page.locator(".pedit .act", { hasText: "Save" }).click();
-  await page.waitForSelector(".pname", { timeout: 20000 });
-  await page.waitForTimeout(400);
+  // Wait for the new name rather than for a timer: the page reloads the row
+  // before it leaves edit mode, and a fixed pause races that round trip.
+  const saved = await page.waitForFunction(
+    (want) => document.querySelector(".pname")?.textContent?.trim() === want,
+    `${who.displayName} Edited`, { timeout: 20000 },
+  ).then(() => true).catch(() => false);
   await page.screenshot({ path: `${OUT}/15-person-edited.png`, fullPage: true });
   check("the screen saved the name and the circle",
-    (await page.locator(".pname").innerText()).trim() === `${who.displayName} Edited`
-    && /neighbors/i.test(await page.locator(".phead .meta").innerText()));
+    saved && /neighbors/i.test(await page.locator(".phead .meta").innerText()),
+    [saved, await page.locator(".pname").innerText().catch(() => null)]);
+
+  /* M. when you last saw them */
+  // Last seen is the newest visit, not a number anyone sets, so these compare
+  // whole timestamps: this person already has a visit from the note, dated
+  // midnight today, and an older hand-logged one must not displace it.
+  const seenBefore = await readPerson();
+  const ms = (x) => (x ? new Date(x).getTime() : null);
+  const NOW = new Date().toISOString();
+  const made = await page.request.post(`${BASE}/api/v1/people/${who.id}/visits`, { data: { occurredAt: NOW, summary: "Saw them, live check." } });
+  check("POST a visit is 201", made.status() === 201, made.status());
+  const visitId = (await made.json()).visit?.id;
+  check("a newer visit becomes last seen", ms((await readPerson()).lastInteractionAt) === ms(NOW), [(await readPerson()).lastInteractionAt, NOW]);
+  const OLDER = new Date(Date.now() - 30 * 86400000).toISOString();
+  check("moving the day is a 200", (await page.request.patch(`${BASE}/api/v1/people/${who.id}/visits/${visitId}`, { data: { occurredAt: OLDER } })).status() === 200);
+  check("moving it back hands last seen to the visit the note made",
+    ms((await readPerson()).lastInteractionAt) === ms(seenBefore.lastInteractionAt),
+    [(await readPerson()).lastInteractionAt, seenBefore.lastInteractionAt]);
+  check("a day that has not happened is refused",
+    (await page.request.post(`${BASE}/api/v1/people/${who.id}/visits`, { data: { occurredAt: new Date(Date.now() + 7 * 86400000).toISOString() } })).status() === 400);
+  // A visit a note produced belongs to that note: changing it here would be
+  // undone by the next re-file, silently, which is worse than not offering it.
+  const [fromNote] = await q("select id from interactions where user_id = $1 and person_id = $2 and capture_id is not null limit 1", [user.id, who.id]);
+  if (fromNote) {
+    check("a note's visit cannot be deleted from the person page",
+      (await page.request.delete(`${BASE}/api/v1/people/${who.id}/visits/${fromNote.id}`)).status() === 404);
+    check("nor moved from there", (await page.request.patch(`${BASE}/api/v1/people/${who.id}/visits/${fromNote.id}`, { data: { occurredAt: OLDER } })).status() === 404);
+  }
+  check("removing a hand-logged visit is a 200", (await page.request.delete(`${BASE}/api/v1/people/${who.id}/visits/${visitId}`)).status() === 200);
+  check("and last seen is still what the notes say", ms((await readPerson()).lastInteractionAt) === ms(seenBefore.lastInteractionAt));
+  check("the removed visit is gone from the table", Number((await q("select count(*) n from interactions where id = $1", [visitId]))[0].n) === 0);
+  check("logging a visit signed out is a 401",
+    (await (await browser.newContext()).request.post(`${BASE}/api/v1/people/${who.id}/visits`, { data: { occurredAt: OLDER } })).status() === 401);
+
+  // and from the screen
+  await page.goto(`${BASE}/people/${who.id}`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".phead", { timeout: 20000 });
+  await page.locator(".label", { hasText: "History" }).locator(".act").click();
+  await page.waitForSelector(".pedit input[type=date]", { timeout: 20000 });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/16-saw-them.png`, fullPage: true });
+  const seenDay = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
+  await page.locator(".pedit input[type=date]").fill(seenDay);
+  await page.locator(".pedit .field input").fill("Saw them, from the screen.");
+  await page.locator(".pedit .act", { hasText: "Save" }).click();
+  await page.waitForSelector(".tl .ev", { timeout: 20000 });
+  await page.waitForTimeout(600);
+  const logged = await q(
+    "select id, to_char(occurred_at at time zone 'UTC', 'YYYY-MM-DD') d, summary from interactions where user_id = $1 and person_id = $2 and capture_id is null",
+    [user.id, who.id]);
+  check("Saw them writes a visit on the day you picked", logged.length === 1 && logged[0].d === seenDay && /from the screen/.test(logged[0].summary), logged);
+  check("a hand-logged visit offers to move or remove itself", (await page.locator(".ev .act", { hasText: "Remove" }).count()) === 1);
+  await page.locator(".ev .act", { hasText: "Remove" }).click();
+  await page.waitForTimeout(1500);
+  check("and Remove takes it away again",
+    Number((await q("select count(*) n from interactions where user_id = $1 and person_id = $2 and capture_id is null", [user.id, who.id]))[0].n) === 0);
+
+  /* N. the places you have named, for naming the next one with a tap */
+  const near = await (await page.request.get(`${BASE}/api/v1/places?lat=32.8&lng=-96.8`)).json();
+  check("GET /api/v1/places near a place you know finds it",
+    near.places.some((pl) => pl.name === "Kith Test Hall" && pl.distanceM != null), near.places);
+  const far = await (await page.request.get(`${BASE}/api/v1/places?lat=40.7&lng=-74.0`)).json();
+  check("and standing 2000km away finds none of it", !far.places.some((pl) => pl.name === "Kith Test Hall"), far.places);
+  const anywhere = await (await page.request.get(`${BASE}/api/v1/places`)).json();
+  check("with no fix at all it still lists what you know", Array.isArray(anywhere.places) && anywhere.places.some((pl) => pl.name === "Kith Test Hall"), anywhere.places);
+  check("places signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/places`)).status() === 401);
 } catch (e) {
   failures++;
   console.log("  CRASH", e?.message ?? e);
   await page.screenshot({ path: `${OUT}/99-crash.png`, fullPage: true }).catch(() => {});
 } finally {
-  /* M. cleanup, by the ids this run made */
+  /* O. cleanup, by the ids this run made */
   if (placeId) {
     await q("delete from person_places where place_id = $1", [placeId]);
     await q("delete from places where id = $1 and user_id = $2", [placeId, user.id]);

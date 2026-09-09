@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { store, ApiError, type Coords } from "@/lib/store";
+import { store, ApiError, type Coords, type NearbyPlace } from "@/lib/store";
 import { Recorder, recorderSupported } from "@/lib/recorder";
 import { audioExtension } from "@/lib/audio";
 import { Waveform } from "./Waveform";
@@ -294,6 +294,32 @@ function LocationChoice({ coords, mode, name, onMode, onName }: {
 }) {
   const searching = coords === undefined;
   const off = coords === null;
+
+  // The places you have already named. The first visit to somewhere is typing;
+  // every one after that is a tap. Without this the place list never grows,
+  // and with no places, location can never rank anything.
+  const [known, setKnown] = useState<NearbyPlace[]>([]);
+  useEffect(() => {
+    if (coords === undefined) return;
+    let alive = true;
+    store.places(coords ?? null)
+      .then((rows) => { if (alive) setKnown(rows); })
+      .catch(() => { if (alive) setKnown([]); });
+    return () => { alive = false; };
+  }, [coords?.lat, coords?.lng, coords === undefined]);
+
+  const offer = known.filter((p) => p.name.toLowerCase() !== name.trim().toLowerCase()).slice(0, 4);
+  const nearby = offer.length > 0 && (mode === "here" || mode === "elsewhere") && (
+    <div className="meta" style={{ marginTop: 10, gap: 16 }}>
+      {mode === "here" ? "You know" : "Or"}
+      {offer.map((p) => (
+        <button key={p.id} type="button" className="act" onClick={() => onName(p.name)}>
+          {p.name}{p.distanceM != null && p.distanceM > 40 ? ` ${p.distanceM}m` : ""}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div className="place anim" style={style(4, { margin: 0 })}>
       <div className="tabs" role="group" aria-label="Where this happened">
@@ -314,6 +340,7 @@ function LocationChoice({ coords, mode, name, onMode, onName }: {
             <label className="field">
               <input value={name} onChange={(e) => onName(e.target.value)} placeholder="Name this place (optional)" maxLength={120} autoComplete="off" />
             </label>
+            {nearby}
           </div>
         </div>
       )}
@@ -324,6 +351,7 @@ function LocationChoice({ coords, mode, name, onMode, onName }: {
             <input value={name} onChange={(e) => onName(e.target.value)} placeholder="Where did this happen?" maxLength={120} autoComplete="off" autoFocus />
           </label>
           <div className="lede" style={{ marginTop: 8 }}>Type the place and Kith remembers it. Leave it blank and the note is filed without one.</div>
+          {nearby}
         </div>
       )}
 

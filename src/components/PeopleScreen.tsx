@@ -39,10 +39,17 @@ export function PeopleScreen() {
     try { sessionStorage.setItem(PEOPLE_VIEW_KEY, params.toString()); } catch { /* private mode */ }
   }, [params]);
 
+  /**
+   * One filter at a time, and one row to pick it from. Two rows of the same
+   * underlined words read as one confusing thing, and a circle and a tag
+   * narrowing each other is a question nobody was asking: everyone starts in
+   * Other, so "Other AND Journeymen" is just Journeymen. Circles and tags both
+   * live in the URL still, so old links keep working.
+   */
   const setFilter = (next: { circle?: Circle | "all"; tag?: string | null }) => {
-    const q = new URLSearchParams(params.toString());
-    if (next.circle !== undefined) { if (next.circle === "all") q.delete("circle"); else q.set("circle", next.circle); }
-    if (next.tag !== undefined) { if (next.tag) q.set("tag", next.tag); else q.delete("tag"); }
+    const q = new URLSearchParams();
+    if (next.circle && next.circle !== "all") q.set("circle", next.circle);
+    if (next.tag) q.set("tag", next.tag);
     const s = q.toString();
     router.replace(`/people${s ? `?${s}` : ""}`, { scroll: false });
   };
@@ -61,20 +68,17 @@ export function PeopleScreen() {
       <h1 className="h1 fade" style={{ marginTop: 14 }}>Your people</h1>
       <p className="stamp anim" style={style(1, { marginTop: 10 })}>{stamp}</p>
 
-      <div className="tabs circle-row anim" style={style(2, { marginTop: 20 })} role="group" aria-label="Circle">
-        <button type="button" aria-pressed={circle === "all"} onClick={() => setFilter({ circle: "all" })}>Everyone</button>
-        {CIRCLES.map((c) => (
-          <button key={c.key} type="button" aria-pressed={circle === c.key} onClick={() => setFilter({ circle: c.key })}>{c.label}</button>
+      <div className="tabs circle-row anim" style={style(2, { marginTop: 20 })} role="group" aria-label="Narrow the list">
+        <button type="button" aria-pressed={!filtered} onClick={() => setFilter({ circle: "all", tag: null })}>Everyone</button>
+        {(data?.circles ?? []).map((key) => (
+          <button key={key} type="button" aria-pressed={circle === key} onClick={() => setFilter({ circle: key })}>
+            {CIRCLES.find((c) => c.key === key)?.label ?? key}
+          </button>
+        ))}
+        {(data?.tags ?? []).map((t) => (
+          <button key={t} type="button" aria-pressed={tag?.toLowerCase() === t.toLowerCase()} onClick={() => setFilter({ tag: t })}>{t}</button>
         ))}
       </div>
-      {data && data.tags.length > 0 && (
-        <div className="tabs sub anim" style={style(3)} role="group" aria-label="Tag">
-          <button type="button" aria-pressed={!tag} onClick={() => setFilter({ tag: null })}>Any tag</button>
-          {data.tags.map((t) => (
-            <button key={t} type="button" aria-pressed={tag?.toLowerCase() === t.toLowerCase()} onClick={() => setFilter({ tag: t })}>{t}</button>
-          ))}
-        </div>
-      )}
 
       {error && <p className="empty">Couldn&rsquo;t load your people.<br /><em>{error}</em></p>}
       {data && !error && data.people.length === 0 && (

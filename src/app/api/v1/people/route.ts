@@ -55,7 +55,7 @@ export const GET = route(async (req: Request) => {
       ))
       .orderBy(sql`${people.lastInteractionAt} desc nulls last`, asc(people.displayName))
       .limit(500),
-    d.select({ tags: people.tags }).from(people).where(own),
+    d.select({ tags: people.tags, circle: people.circle }).from(people).where(own),
     d.execute(sql`
       select (select count(*) from ${facts} where ${facts.userId} = ${userId}) as facts,
              (select count(*) from ${places} where ${places.userId} = ${userId}) as places`),
@@ -66,11 +66,17 @@ export const GET = route(async (req: Request) => {
   const tags = [...tagCounts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([t]) => t);
+  // Only the circles that actually hold someone. Nearly everyone starts in
+  // Other, and five words that return nothing are five words in the way.
+  const circleCounts = new Map<string, number>();
+  for (const p of roster) circleCounts.set(p.circle, (circleCounts.get(p.circle) ?? 0) + 1);
+  const circles = CIRCLES.filter((c) => circleCounts.has(c));
   const t = totals.rows[0] as { facts: unknown; places: unknown };
 
   return NextResponse.json({
     people: rows,
     tags,
+    circles,
     counts: { people: roster.length, facts: Number(t.facts), places: Number(t.places) },
   });
 });

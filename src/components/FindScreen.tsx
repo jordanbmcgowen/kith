@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { store, type SearchResults } from "@/lib/store";
+import { store, type SearchResults, type Coords } from "@/lib/store";
 import { fmtDay } from "@/lib/format";
 import { PersonRow } from "./PersonRow";
 
@@ -56,15 +56,25 @@ export function FindScreen() {
     return () => clearTimeout(t);
   }, [text, q, router]);
 
+  // Where you are standing only ever reorders results: nobody is hidden by it,
+  // and a refusal or a phone with no fix costs nothing. Asked once per visit
+  // to the screen, not on every keystroke.
+  const [here, setHere] = useState<Coords | null>(null);
+  useEffect(() => {
+    let alive = true;
+    store.coords().then((c) => { if (alive && c) setHere(c); });
+    return () => { alive = false; };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     setBusy(true);
-    store.search(q)
+    store.search(q, here)
       .then((next) => { if (alive) { setData(next); setError(null); } })
       .catch((e) => { if (alive) { setError(message(e)); setData(null); } })
       .finally(() => { if (alive) setBusy(false); });
     return () => { alive = false; };
-  }, [q]);
+  }, [q, here]);
 
   const results = q ? data?.results ?? [] : [];
   const hints = data?.hints ?? [];
