@@ -141,6 +141,20 @@ export type TodayView = {
   review: { count: number; oldestId: string | null };
 };
 
+/** Who you are, what Kith holds, and the one setting that changes what it says. */
+export type Me = {
+  name: string | null;
+  email: string | null;
+  image: string | null;
+  timezone: string;
+  since: string;
+  /** Days between visits, per circle. What Today means by slipping. */
+  cadence: Record<string, number>;
+  /** Derived from the scopes Google actually granted, never from a wish list. */
+  connected: { google: boolean; calendar: boolean; contacts: boolean };
+  counts: { people: number; facts: number; visits: number; threads: number; places: number; notes: number; loose: number };
+};
+
 /** A place you have already named. Nearest first when the phone has a fix. */
 export type NearbyPlace = { id: string; name: string; distanceM: number | null };
 
@@ -213,6 +227,10 @@ export type Store = {
   places(coords?: Coords | null): Promise<NearbyPlace[]>;
   /** The home screen. Coordinates name the place and lift who is near; they hide nobody. */
   today(coords?: Coords | null): Promise<TodayView>;
+  /** Your account, your counts, and your cadences. */
+  me(): Promise<Me>;
+  /** Changing a cadence recomputes warmth for everyone who inherits it. */
+  updateMe(patch: { timezone?: string; cadence?: Record<string, number> }): Promise<void>;
 };
 
 export class ApiError extends Error {
@@ -436,6 +454,16 @@ const demoStore: Store = {
       review: { count: DEMO_CAPTURES.filter((c) => c.status === "needs_review").length, oldestId: null },
     };
   },
+  async me() {
+    return {
+      name: "Jordan McGowen", email: "you@example.com", image: null,
+      timezone: "America/Chicago", since: DEMO_AGO(120),
+      cadence: { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 },
+      connected: { google: true, calendar: false, contacts: false },
+      counts: { people: DEMO_PEOPLE.length, facts: 4, visits: 3, threads: 2, places: 2, notes: DEMO_CAPTURES.length, loose: 1 },
+    };
+  },
+  async updateMe() { /* nothing to persist in demo data */ },
 };
 /* ══════════════════════ END DEMO DATA — DELETE ABOVE THIS LINE ══════════════════════ */
 
@@ -566,6 +594,14 @@ const liveStore: Store = {
     if (coords) { qs.set("lat", String(coords.lat)); qs.set("lng", String(coords.lng)); }
     const s = qs.toString();
     return api<TodayView>(`/api/v1/today${s ? `?${s}` : ""}`);
+  },
+
+  me() {
+    return api<Me>("/api/v1/me");
+  },
+
+  async updateMe(patch) {
+    await api("/api/v1/me", { ...json(patch), method: "PATCH" });
   },
 };
 

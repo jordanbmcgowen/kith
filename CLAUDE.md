@@ -318,10 +318,36 @@ Jordan used the app and two things came back. Both are built.
 - Row-shaped links (`a.row`, `a.thread`, `a.loose`) carry no underline: the row
   is the affordance. Underlines belong to `.act` and `.link`, which are words
   you press.
+- **You, rebuilt rather than ported.** The prototype's You was four toggles for
+  Google Contacts, Google Calendar, Location and Push. Three of those switch
+  things that do not exist, and Location is a browser permission the app does
+  not own, so porting it would have shipped a screen of dead switches. What is
+  there instead is what is real:
+  - **The cadences.** `users.cadenceDefaults` is read in five places, decides
+    who Today calls slipping and how warmth orders every list, and had nowhere
+    to be seen. It is on screen and editable now. A judgment the user cannot
+    see is not one they can argue with.
+  - `PATCH /api/v1/me` calls `refreshEveryone` in `src/lib/people.ts`: warmth is
+    stored, not derived on read, so changing a cadence has to rewrite every
+    meter it applies to or they go on describing the old answer. Two reads and
+    one write whatever the roster size, and the formula stays in `warmth.ts`;
+    a second copy of it in SQL is how the two drift apart.
+  - `GET /api/v1/me/export` gives back every row as one JSON file, embeddings
+    stripped (derived from the text beside them, and fifty times the size).
+    A private memory system you cannot get your memories out of is a worse deal
+    than a notebook.
+  - "Connected" is derived from the scopes Google actually granted, so it can
+    never claim something that is not on. With no sensitive scopes the block
+    hides entirely, the same way Today's blocks hide.
+  - Sign out used to hang off the bottom of the record screen. It lives here.
+  All five tabs go somewhere now; `.nv.soon` and the `Soon` component are gone.
+- Not built on purpose: **delete everything**. The prototype promises it in one
+  tap. It is the one irreversible button in the app and wants a typed
+  confirmation and a deliberate conversation, not a quiet ship.
 
 Not built yet:
 
-- The You screen. A placeholder tab.
+- Deleting the account and everything in it. See the note above.
 - Marking a thread done; merging or deleting people.
 - PWA manifest and service worker
 - Web push

@@ -35,7 +35,8 @@ src/
   app/people/[id]/        the person page, read only (step 4)
   app/find/               search, names and memories together (step 5)
   app/today/              the home screen: owed, slipping, loose, who is near
-  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TodayScreen, TagAdder, TabBar, Shell
+  app/you/                your account, your cadences, and an export of everything
+  components/             CaptureScreen, ConfirmScreen, PeopleScreen, PersonScreen, FindScreen, TodayScreen, YouScreen, TagAdder, TabBar, Shell
   workers/process-capture.ts   the queue consumer that ties it together
 scripts/
   pipeline-check.ts       runs the worker's filing path against the real DB, models stubbed
@@ -45,7 +46,7 @@ prototype/
   index.html              the interactive design reference. open it in a browser.
 ```
 
-Every screen but You exists as React. `prototype/index.html` remains the design
+Every screen exists as React. `prototype/index.html` remains the design
 reference and carries the demo-data seam described in `CLAUDE.md`.
 
 ## The one idea worth protecting
@@ -105,6 +106,9 @@ npm run dev
 - **Employers are tags, not circles.** A circle holds one value and sets the
   cadence; a tag list holds every company someone has worked at. "Everyone I
   know at Neighborly" stays a question you can ask after they change jobs.
+- **You can take it all with you.** Every row exports as one JSON file, and the
+  cadences that decide who counts as slipping are on screen and editable. A
+  private memory system you cannot leave is a worse deal than a notebook.
 - **Search says why it matched.** Trigram over names, tags and roles for when
   you remember the word; cosine over facts and visits for when you only
   remember the shape of the thing. Every result carries the line that explains

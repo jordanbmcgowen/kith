@@ -100,6 +100,8 @@ let createdIds = [];
 // Section K makes these and section L removes them, whatever happens in between.
 let placeId = null;
 let otherUserId = null;
+// Section S changes this on the real account; section T puts it back.
+let cadenceWas = null;
 try {
   /* A. auth and the new GET route on a real note, read only */
   const list = await page.request.get(`${BASE}/api/v1/captures`);
@@ -400,7 +402,8 @@ try {
     { words, circles: tj.circles, tags: tj.tags });
   check("no circle in the row is empty", !words.includes("family") || tj.circles.includes("family"), tj.circles);
   check("tab bar: People is current and the mic goes to record", (await page.locator(".nav .nv[aria-current='true']").innerText()).trim().toLowerCase() === "people" && (await page.locator(".nav a[href='/record'] .nmic").count()) === 1);
-  check("tab bar: only You is a placeholder now", (await page.locator(".nav .nv.soon").count()) === 1 && (await page.locator(".nav a[href='/today']").count()) === 1);
+  check("tab bar: all five tabs go somewhere", (await page.locator(".nav .nv.soon").count()) === 0
+    && (await page.locator(".nav a").count()) === 5);
 
   // the person page
   await page.locator(`a.row[href='/people/${who.id}']`).click();
@@ -499,9 +502,9 @@ try {
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${OUT}/11-find.png`, fullPage: true });
   check("the empty field offers every hint the API sent", (await page.locator(".block .row .recall").count()) === sj0.hints.length, await page.locator(".block .row .recall").count());
-  check("tab bar: Find is current, only You is a placeholder",
+  check("tab bar: Find is current, and nothing is dimmed",
     (await page.locator(".nav .nv[aria-current='true'] .nl").innerText()).trim().toLowerCase() === "find"
-    && (await page.locator(".nav .nv.soon").count()) === 1);
+    && (await page.locator(".nav .nv.soon").count()) === 0);
 
   await page.locator("#q").fill(who.displayName);
   await page.waitForSelector(".hit", { timeout: 20000 });
@@ -684,12 +687,84 @@ try {
   await page.waitForSelector(".tabs", { timeout: 20000 });
   check("the filter row keeps its own scroll instead of dragging the page",
     (await page.locator(".tabs").evaluate((el) => getComputedStyle(el).overscrollBehaviorX)) === "contain");
+
+  /* S. You: the account, the cadences, and getting your data out */
+  const meRes = await page.request.get(`${BASE}/api/v1/me`);
+  const me = await meRes.json();
+  cadenceWas = me.cadence;
+  check("GET /api/v1/me is 200 with the account, the cadences and the counts", meRes.status() === 200
+    && ["name", "email", "timezone", "cadence", "connected", "counts"].every((k) => k in me), Object.keys(me));
+  check("me signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/me`)).status() === 401);
+  const [dbCounts] = await q(`select
+    (select count(*) from people where user_id = $1 and archived_at is null) people,
+    (select count(*) from facts where user_id = $1) facts,
+    (select count(*) from captures where user_id = $1) notes`, [user.id]);
+  check("the counts are the real rows", me.counts.people === Number(dbCounts.people)
+    && me.counts.facts === Number(dbCounts.facts) && me.counts.notes === Number(dbCounts.notes), [me.counts, dbCounts]);
+  // Connected is read off the scopes Google granted, never off a wish list.
+  const [acct] = await q("select coalesce(scope, '') s from accounts where user_id = $1 and provider = 'google' limit 1", [user.id]);
+  check("connected reports the scopes actually granted",
+    me.connected.calendar === /calendar/.test(acct?.s ?? "") && me.connected.contacts === /contacts/.test(acct?.s ?? ""),
+    [me.connected, acct?.s]);
+
+  // A cadence is the one setting that rewrites what the app says about people.
+  const [warmBefore] = await q("select id, warmth from people where user_id = $1 and circle = 'other' and last_interaction_at is not null order by last_interaction_at limit 1", [user.id]);
+  const bumped = { ...me.cadence, other: 3 };
+  check("PATCH /api/v1/me is 200", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: bumped } })).status() === 200);
+  const [warmAfter] = await q("select warmth from people where id = $1", [warmBefore.id]);
+  check("changing a cadence rewrites every warmth it applies to",
+    Number(warmAfter.warmth) !== Number(warmBefore.warmth), [warmBefore.warmth, warmAfter.warmth]);
+  check("and the person page reads the new cadence",
+    (await (await page.request.get(`${BASE}/api/v1/people/${warmBefore.id}`)).json()).person.cadenceDays === 3);
+  await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: cadenceWas } });
+  cadenceWas = null;
+  const [warmBack] = await q("select warmth from people where id = $1", [warmBefore.id]);
+  check("putting it back puts warmth back", Number(warmBack.warmth) === Number(warmBefore.warmth), [warmBefore.warmth, warmBack.warmth]);
+  check("a cadence of zero days is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: { other: 0 } } })).status() === 400);
+  check("an unknown circle is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: { golf: 10 } } })).status() === 400);
+  check("an unknown field is refused", (await page.request.patch(`${BASE}/api/v1/me`, { data: { nope: 1 } })).status() === 400);
+  check("editing the account signed out is a 401",
+    (await (await browser.newContext()).request.patch(`${BASE}/api/v1/me`, { data: { timezone: "UTC" } })).status() === 401);
+
+  // Export: a private memory system you cannot get your memories out of is a
+  // worse deal than a notebook.
+  const dump = await page.request.get(`${BASE}/api/v1/me/export`);
+  const text = await dump.text();
+  check("export is a JSON attachment", dump.status() === 200
+    && /attachment; filename="kith-\d{4}-\d{2}-\d{2}\.json"/.test(dump.headers()["content-disposition"] ?? ""),
+    dump.headers()["content-disposition"]);
+  const dumped = JSON.parse(text);
+  check("it holds every table, at the real row counts",
+    dumped.people.length === Number(dbCounts.people) && dumped.facts.length === Number(dbCounts.facts)
+    && ["captures", "interactions", "threads", "places", "personPlaces", "looseThreads"].every((k) => Array.isArray(dumped[k])),
+    Object.keys(dumped));
+  check("and leaves the embeddings out", !text.includes("\"embedding\""));
+  check("export signed out is a 401", (await (await browser.newContext()).request.get(`${BASE}/api/v1/me/export`)).status() === 401);
+
+  await page.goto(`${BASE}/you`, { waitUntil: "networkidle" });
+  await page.waitForSelector(".cad", { timeout: 20000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${OUT}/18-you.png`, fullPage: true });
+  check("You shows one cadence per circle", (await page.locator(".cad").count()) === 5);
+  check("and the way out", (await page.locator("form button", { hasText: "Sign out" }).count()) === 1);
+  check("the record screen no longer carries a stray sign out",
+    (await page.goto(`${BASE}/record`, { waitUntil: "networkidle" }), await page.locator(".foot").count()) === 0);
 } catch (e) {
   failures++;
   console.log("  CRASH", e?.message ?? e);
   await page.screenshot({ path: `${OUT}/99-crash.png`, fullPage: true }).catch(() => {});
 } finally {
-  /* R. cleanup, by the ids this run made */
+  /* T. cleanup, by the ids this run made */
+  if (cadenceWas) {
+    // The run changed a real setting on the real account and crashed before
+    // putting it back. Everything else this script touches it created; this it
+    // did not. Restore through the API rather than in SQL, because the API is
+    // what recomputes the warmth the change rewrote.
+    const put = await page.request.patch(`${BASE}/api/v1/me`, { data: { cadence: cadenceWas } })
+      .then((r) => r.status()).catch(() => 0);
+    if (put !== 200) await q("update users set cadence_defaults = $2 where id = $1", [user.id, JSON.stringify(cadenceWas)]);
+    console.log(`cleanup: cadences restored${put === 200 ? " and warmth recomputed" : " in SQL; warmth needs a re-save on You"}`);
+  }
   if (placeId) {
     await q("delete from person_places where place_id = $1", [placeId]);
     await q("delete from places where id = $1 and user_id = $2", [placeId, user.id]);

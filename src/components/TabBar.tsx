@@ -3,16 +3,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * The tab bar from the prototype: Today, People, the mic, Find, You. Only You
- * is still dimmed and inert; a tab that goes nowhere is better than a screen
- * that says so. The mic is the one circle in the bar, because a circle means
- * "press me".
+ * The tab bar from the prototype: Today, People, the mic, Find, You. All five
+ * go somewhere now. The mic is the one circle in the bar, because a circle
+ * means "press me".
  */
 export function TabBar() {
   const path = usePathname() ?? "";
   const current = path === "/people" || path.startsWith("/people/") ? "people"
     : path === "/find" ? "find"
     : path === "/today" ? "today"
+    : path === "/you" ? "you"
     : null;
 
   return (
@@ -29,16 +29,10 @@ export function TabBar() {
       <Link href="/find" className="nv" aria-current={current === "find" ? "true" : undefined}>
         {FIND}<span className="nl">Find</span>
       </Link>
-      <Soon label="You">{YOU}</Soon>
+      <Link href="/you" className="nv" aria-current={current === "you" ? "true" : undefined}>
+        {YOU}<span className="nl">You</span>
+      </Link>
     </nav>
-  );
-}
-
-function Soon({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <span className="nv soon" aria-disabled="true" title={`${label} is not built yet`}>
-      {children}<span className="nl">{label}</span>
-    </span>
   );
 }
 

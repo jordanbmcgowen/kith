@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
-import { auth, signOut } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 import { Shell } from "@/components/Shell";
 import { CaptureScreen } from "@/components/CaptureScreen";
 
+/** Record. Signing out used to hang off the bottom of this screen; it lives on You now. */
 export default async function RecordPage() {
   const session = await auth();
   if (!session?.user) redirect("/");
@@ -10,17 +11,6 @@ export default async function RecordPage() {
   return (
     <Shell>
       <CaptureScreen />
-      <footer className="foot">
-        <span>{session.user.email}</span>
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/" });
-          }}
-        >
-          <button type="submit">Sign out</button>
-        </form>
-      </footer>
     </Shell>
   );
 }
