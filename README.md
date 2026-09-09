@@ -99,6 +99,11 @@ npm run dev
   and loose thread on the confirmation screen can be edited in place before it
   files. The transcript never changes: facts are derived, so fixing one is a
   re-file, and the corrected words are what get embedded.
+- **You see people in rooms, not one at a time.** "Saw them" on the people list
+  turns the rows into choices: filter to a group, take all of them, drop whoever
+  was not there, pick the day. Nothing starts selected, and anyone who already
+  has a visit that day is left alone, because a group is exactly the button you
+  tap twice.
 - **Last seen is never set, only computed.** It is the date of the most recent
   visit, so the way to correct it is to correct the visits. "Saw them" logs one
   on a chosen day; a visit that came from a note is corrected on that note,

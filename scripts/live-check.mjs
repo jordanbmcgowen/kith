@@ -100,6 +100,7 @@ let createdIds = [];
 // Section K makes these and section L removes them, whatever happens in between.
 let placeId = null;
 let otherUserId = null;
+let otherPersonId = null;
 // Section S changes this on the real account; section T puts it back.
 let cadenceWas = null;
 try {
@@ -531,8 +532,9 @@ try {
   // tenant filter is to have a second tenant.
   otherUserId = randomUUID();
   await q("insert into users (id, name, email) values ($1, $2, $3)", [otherUserId, "Kith Test Other", `kith-test-${otherUserId}@example.invalid`]);
-  await q("insert into people (user_id, display_name, tags, role) values ($1, $2, $3, $4)",
+  const [delta] = await q("insert into people (user_id, display_name, tags, role) values ($1, $2, $3, $4) returning id",
     [otherUserId, "Kith Test Delta", [TAG], "belongs to the other account"]);
+  otherPersonId = delta.id;
   const leak = await search("Kith Test Delta");
   check("another account's person never comes back", !leak.results.some((r) => /Delta/.test(r.person.displayName)), leak.results.map((r) => r.person.displayName));
   const leakTag = await search(TAG);
@@ -682,6 +684,65 @@ try {
   await page.waitForTimeout(1500);
   check("and Remove takes it away again",
     Number((await q("select count(*) n from interactions where user_id = $1 and person_id = $2 and capture_id is null", [user.id, who.id]))[0].n) === 0);
+
+  /* M2. saying you saw a room full of people, which is how you actually see them */
+  const GROUP_DAY = new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10);
+  const groupIds = createdIds;
+  const future = await page.request.post(`${BASE}/api/v1/visits`, { data: { personIds: groupIds, occurredAt: new Date(Date.now() + 5 * 86400000).toISOString() } });
+  check("a group visit in the future is refused", future.status() === 400, future.status());
+  const foreign = await page.request.post(`${BASE}/api/v1/visits`, { data: { personIds: [...groupIds, otherPersonId], occurredAt: `${GROUP_DAY}T12:00:00Z` } });
+  check("one id that is not yours fails the whole call, rather than logging the rest", foreign.status() === 400, foreign.status());
+  check("and nothing was written by the call that failed",
+    Number((await q("select count(*) n from interactions where user_id = $1 and person_id = any($2::uuid[]) and capture_id is null", [user.id, groupIds]))[0].n) === 0);
+  check("a group visit signed out is a 401",
+    (await (await browser.newContext()).request.post(`${BASE}/api/v1/visits`, { data: { personIds: groupIds, occurredAt: `${GROUP_DAY}T12:00:00Z` } })).status() === 401);
+
+  // The screen: filter to this note's tag, choose everyone in it, pick a day.
+  await page.goto(`${BASE}/people?tag=${encodeURIComponent(TAG)}`, { waitUntil: "networkidle" });
+  await page.waitForSelector("a.row[href^='/people/']", { timeout: 20000 });
+  await page.locator(".stamp .act", { hasText: "Saw them" }).click();
+  await page.waitForSelector(".picking", { timeout: 10000 });
+  check("choosing starts with nobody chosen: a visit that did not happen is the one thing this must not invent",
+    /^0 selected/i.test((await page.locator(".picking .stamp").first().innerText()).trim()),
+    await page.locator(".picking .stamp").first().innerText());
+  check("the rows became choices, not links", (await page.locator(".row.pickable").count()) === groupIds.length
+    && (await page.locator("a.row[href^='/people/']").count()) === 0);
+  await page.locator(".picking .act", { hasText: `All ${groupIds.length}` }).click();
+  check("All takes everyone in the filter",
+    new RegExp(`^${groupIds.length} selected`, "i").test((await page.locator(".picking .stamp").first().innerText()).trim()),
+    await page.locator(".picking .stamp").first().innerText());
+  check("and every chosen row says so", (await page.locator(".row.pickable.on").count()) === groupIds.length);
+  await page.locator(".row.pickable").first().click();
+  check("tapping one takes it back off", (await page.locator(".row.pickable.on").count()) === groupIds.length - 1);
+  await page.locator(".picking .act", { hasText: `All ${groupIds.length}` }).click();
+  await page.locator(".picking input[type=date]").fill(GROUP_DAY);
+  await page.screenshot({ path: `${OUT}/19-saw-them.png`, fullPage: true });
+  await page.locator(".picking .act.gold").click();
+  await page.waitForSelector(".picking", { state: "detached", timeout: 20000 });
+
+  const groupVisits = await q(
+    "select person_id, to_char(occurred_at at time zone 'UTC', 'YYYY-MM-DD') d from interactions where user_id = $1 and person_id = any($2::uuid[]) and capture_id is null",
+    [user.id, groupIds]);
+  check("one visit each, on the day picked, in one go",
+    groupVisits.length === groupIds.length && groupVisits.every((v) => v.d === GROUP_DAY), groupVisits);
+  // Last seen is the most recent visit, and these people already have one from
+  // the note. So the answer is the later of the two, which is what the
+  // database is asked for rather than assumed.
+  const groupWarm = await q(`
+    select p.id, p.last_interaction_at, p.warmth,
+           (select max(i.occurred_at) from interactions i where i.person_id = p.id and i.user_id = p.user_id) newest
+    from people p where p.id = any($1::uuid[])`, [groupIds]);
+  check("last seen is the newest visit they have, not whichever was written last",
+    groupWarm.every((r) => r.last_interaction_at && r.newest && new Date(r.last_interaction_at).getTime() === new Date(r.newest).getTime()), groupWarm);
+  check("and warmth was recomputed with it", groupWarm.every((r) => r.warmth > 0), groupWarm.map((r) => r.warmth));
+
+  const twice = await page.request.post(`${BASE}/api/v1/visits`, { data: { personIds: groupIds, occurredAt: `${GROUP_DAY}T12:00:00Z` } });
+  const again = await twice.json();
+  check("doing the same evening twice logs nothing a second time", again.logged === 0 && again.already === groupIds.length, again);
+  check("so the count is still one each",
+    Number((await q("select count(*) n from interactions where user_id = $1 and person_id = any($2::uuid[]) and capture_id is null", [user.id, groupIds]))[0].n) === groupIds.length);
+
+  await q("delete from interactions where user_id = $1 and person_id = any($2::uuid[]) and capture_id is null", [user.id, groupIds]);
 
   /* N. the places you have named, for naming the next one with a tap */
   const near = await (await page.request.get(`${BASE}/api/v1/places?lat=32.8&lng=-96.8`)).json();

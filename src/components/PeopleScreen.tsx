@@ -2,6 +2,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { store, type PeopleList } from "@/lib/store";
+import { toDateInput, fromDateInput } from "@/lib/format";
 import { PersonRow } from "./PersonRow";
 
 const style = (i: number, extra?: CSSProperties) => ({ "--i": i, ...extra }) as CSSProperties;
@@ -23,6 +24,45 @@ export function PeopleScreen() {
 
   const [data, setData] = useState<PeopleList | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Saying you saw people. Nobody meets one person at a time: a soccer game is
+   * eight parents, a Journeymen evening is twenty, and logging them one by one
+   * is why three quarters of a roster can sit at never-seen while its owner
+   * sees those people every month.
+   *
+   * Nothing is selected to begin with, and switching the tag filter keeps what
+   * is already chosen, so one evening can span two groups. Recording a visit
+   * that did not happen is the one thing this must never do quietly, which is
+   * also why the count is always on screen.
+   */
+  const [picking, setPicking] = useState(false);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [day, setDay] = useState(() => toDateInput(new Date().toISOString()));
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+
+  const on = new Set(chosen);
+  const toggle = (id: string) => setChosen((c) => (c.includes(id) ? c.filter((k) => k !== id) : [...c, id]));
+  const stop = () => { setPicking(false); setChosen([]); };
+
+  const save = async () => {
+    const when = fromDateInput(day);
+    if (!chosen.length || !when) return;
+    setBusy(true);
+    try {
+      const r = await store.addVisits(chosen, { occurredAt: when });
+      setSaid(r.already
+        ? `Logged ${r.logged}. ${r.already} already had that day.`
+        : `Logged ${r.logged}.`);
+      stop();
+      setData(await store.people({ tag }));
+    } catch (e) {
+      setSaid(text(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -58,7 +98,13 @@ export function PeopleScreen() {
   return (
     <>
       <h1 className="h1 fade" style={{ marginTop: 14 }}>Your people</h1>
-      <p className="stamp anim" style={style(1, { marginTop: 10 })}>{stamp}</p>
+      <p className="stamp anim" style={style(1, { marginTop: 10 })}>
+        {stamp}
+        {!picking && (data?.people.length ?? 0) > 0 && (
+          <button className="act" style={{ marginLeft: 16 }} onClick={() => { setSaid(null); setPicking(true); }}>Saw them</button>
+        )}
+      </p>
+      {said && !picking && <p className="stamp anim" style={style(1, { color: "var(--gold)" })}>{said}</p>}
 
       {(data?.tags.length ?? 0) > 0 && (
         <div className="tabs tag-row anim" style={style(2, { marginTop: 20 })} role="group" aria-label="Narrow by tag">
@@ -66,6 +112,29 @@ export function PeopleScreen() {
           {(data?.tags ?? []).map((t) => (
             <button key={t} type="button" aria-pressed={tag?.toLowerCase() === t.toLowerCase()} onClick={() => setTag(t)}>{t}</button>
           ))}
+        </div>
+      )}
+
+      {picking && (
+        <div className="picking anim" style={style(3)}>
+          <span className="stamp">{chosen.length} selected</span>
+          <label className="ie-when" style={{ margin: 0 }}>
+            On
+            <input type="date" value={day} max={toDateInput(new Date().toISOString())} onChange={(e) => setDay(e.target.value)} />
+          </label>
+          <span className="meta">
+            {data && data.people.length > 0 && (
+              <button className="act" onClick={() => setChosen((c) => [...new Set([...c, ...data.people.map((q) => q.id)])])}>
+                All {data.people.length}
+              </button>
+            )}
+            {chosen.length > 0 && <button className="act" onClick={() => setChosen([])}>None</button>}
+            <button className="act gold" onClick={save} disabled={busy || !chosen.length || !day}>
+              {busy ? "Saving" : "Saw them"}
+            </button>
+            <button className="act" onClick={stop} disabled={busy}>Cancel</button>
+          </span>
+          {said && <span className="stamp" style={{ color: "var(--gold)" }}>{said}</span>}
         </div>
       )}
 
@@ -77,7 +146,12 @@ export function PeopleScreen() {
       )}
       {data && data.people.length > 0 && (
         <div className="list" style={{ marginTop: 4 }}>
-          {data.people.map((p, i) => <PersonRow key={p.id} p={p} index={i + 4} />)}
+          {data.people.map((p, i) => (
+            <PersonRow
+              key={p.id} p={p} index={i + 4}
+              pick={picking ? { on: on.has(p.id), toggle: () => toggle(p.id) } : undefined}
+            />
+          ))}
         </div>
       )}
     </>

@@ -14,13 +14,22 @@ export const sayOf = (p: { pronunciation: string | null; goesBy: string | null }
  * The square used to be coloured by circle. Circles are gone, so it is one
  * colour for everyone: the app has no groups of its own to signal.
  */
-export function PersonRow({ p, index, big }: { p: Row; index: number; big?: boolean }) {
+export function PersonRow({ p, index, big, pick }: {
+  p: Row;
+  index: number;
+  big?: boolean;
+  /** In select mode the row stops being a link and becomes a choice. */
+  pick?: { on: boolean; toggle: () => void };
+}) {
   const say = sayOf(p);
   const days = daysSince(p.lastInteractionAt);
+  const style = { "--i": Math.min(index, 12) } as CSSProperties;
 
-  return (
-    <Link href={`/people/${p.id}`} className="row anim" style={{ "--i": Math.min(index, 12) } as CSSProperties}>
-      <span className="mark">{initials(p.displayName)}</span>
+  const inside = (
+    <>
+      <span className="mark" style={pick?.on ? ({ "--c": "var(--gold)" } as CSSProperties) : undefined}>
+        {initials(p.displayName)}
+      </span>
       <span className="body">
         <span className={`nm${big ? " big" : ""}`}>{p.displayName}</span>
         {say && <span className="say">{say}</span>}
@@ -36,6 +45,18 @@ export function PersonRow({ p, index, big }: { p: Row; index: number; big?: bool
           )}
         </span>
       </span>
-    </Link>
+    </>
   );
+
+  // A button, not a link, while choosing: the row means "I saw them" then,
+  // and a row that navigates under your thumb loses the whole selection.
+  if (pick) {
+    return (
+      <button
+        type="button" className={`row anim pickable${pick.on ? " on" : ""}`} style={style}
+        aria-pressed={pick.on} onClick={pick.toggle}
+      >{inside}</button>
+    );
+  }
+  return <Link href={`/people/${p.id}`} className="row anim" style={style}>{inside}</Link>;
 }

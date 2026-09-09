@@ -34,17 +34,6 @@ The running list of things only he can do. Keep it current: add an item when
 something needs him, strike it when it is done, and say what is on it when he
 asks what is left.
 
-- [ ] **Enable Places API (New) on the Google Cloud project.** One click:
-      https://console.developers.google.com/apis/api/places.googleapis.com/overview?project=649824471182
-      The key itself is set and working. The trap is that Google ships two
-      separate products with almost the same name, each with its own switch:
-      "Places API" (legacy, closed to new projects) and "Places API (New)".
-      The project has the first one on; the code calls the second
-      (`places.googleapis.com/v1/places:searchNearby`). Tested end to end
-      2026-09-09: Google answered 403 "Places API (New) has not been used in
-      project 649824471182 before or it is disabled". Nothing else is wrong,
-      and nothing on our side needs changing. Until then, naming a place by
-      hand works and each name makes the next one a tap.
 - [ ] **Review the note that half-filed.** The "Soccer people / Green Knoll /
       Schofield" note (5d3ef4f1) is still waiting. Its 41 people exist with
       their tags and roles; only "Diane" is left to create. Tapping File it
@@ -58,8 +47,11 @@ Done:
 
 - [x] Review the Banner House note (filed 2026-09-09; it is where the Banner
       House, Meridoh and Pizza Hut tags came from).
-- [x] Set `GOOGLE_PLACES_KEY` on kith-processor (done 2026-09-09; the key is
-      valid and reaching Google. See the open item above for what is left).
+- [x] Set `GOOGLE_PLACES_KEY` on kith-processor, and enable **Places API
+      (New)**, which is a separate product from "Places API" with its own
+      switch (done 2026-09-09). Confirmed end to end: coordinates alone at two
+      Dallas landmarks came back named by Google, and the test rows were
+      removed. Location is now automatic; "Here" needs no typing.
 
 ## Where things stand
 
@@ -431,6 +423,35 @@ Jordan used the app and two things came back. Both are built.
     `experimental.staleTimes` was tried alongside it and went with it. The
     note is in `next.config.ts`. To drive it: tap a person, then go back
     before their page has settled.
+- **Saying you saw a room full of people.** Jordan: "you would expect the user
+  to log many at once, not necessarily one at a time." He is right, and the
+  data says so: 75 of 102 people had never been seen, while he sees the Green
+  Knoll and Journeymen and Schofield groups every month. One at a time is why.
+  - `POST /api/v1/visits` takes `personIds` and a day. Every row in one
+    statement, then `refreshMany` in `src/lib/people.ts` recomputes last seen
+    and warmth for exactly those people, two reads and one write however many
+    there are. `refreshPerson` now delegates to it, so the formula has one home.
+  - One id that is not the user's fails the whole call. A partial answer to "I
+    saw these twelve" is worse than an error, because you would never learn
+    which twelve it managed.
+  - Anyone who already has a visit within twelve hours is left alone rather
+    than given a second. A group is exactly the button you tap twice, and
+    re-running the same evening should cost nothing.
+  - On `/people`: "Saw them" turns the rows into choices, the filter row picks
+    the group, "All 24" takes everyone in it. Nothing starts selected. A visit
+    that did not happen is the one thing this must never invent, so the count
+    is always on screen and the day defaults to today but cannot be in the
+    future. A chosen row says so with a gold initials square: no checkbox, no
+    fill, nothing new on the row.
+  - The selection survives changing the tag, because one evening can span two
+    groups.
+- **Same first name is not a duplicate.** Jordan: "it is common to not get last
+  names, so multiple people with the same first name is not necessarily a
+  duplicate." Checked, and he is right: the three shared first names on the
+  roster (James, John, Luis) are six different people, distinguishable by their
+  tags and roles alone. So there are no duplicates to merge, and nothing in
+  this app may ever propose a merge from a name match. If merging is built, it
+  is the user picking two people, never the app guessing.
 - **You, rebuilt rather than ported.** The prototype's You was four toggles for
   Google Contacts, Google Calendar, Location and Push. Three of those switch
   things that do not exist, and Location is a browser permission the app does

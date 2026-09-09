@@ -219,6 +219,8 @@ export type Store = {
   updatePerson(id: string, patch: PersonPatch): Promise<void>;
   /** "I saw them, on this day." Last seen and warmth follow from the visits. */
   addVisit(personId: string, visit: { occurredAt: string; summary?: string }): Promise<void>;
+  /** "I saw these people, that day." One request, whatever the size of the room. */
+  addVisits(personIds: string[], visit: { occurredAt: string; summary?: string }): Promise<{ logged: number; already: number }>;
   /** Only a visit that came from no note. A note's visit is corrected on the note. */
   editVisit(personId: string, visitId: string, patch: { occurredAt?: string; summary?: string }): Promise<void>;
   removeVisit(personId: string, visitId: string): Promise<void>;
@@ -420,6 +422,10 @@ const demoStore: Store = {
       channel: "in_person", summary: visit.summary || "Saw them.", captureId: null, place: null,
     });
     p.lastInteractionAt = visit.occurredAt;
+  },
+  async addVisits(personIds, visit) {
+    for (const id of personIds) await demoStore.addVisit(id, visit);
+    return { logged: personIds.length, already: 0 };
   },
   async editVisit(personId, visitId, patch) {
     const v = DEMO_DETAIL[personId]?.interactions.find((x) => x.id === visitId);
@@ -644,6 +650,12 @@ const liveStore: Store = {
   async addVisit(personId, visit) {
     await api(`/api/v1/people/${encodeURIComponent(personId)}/visits`, json(visit));
     forget();
+  },
+
+  async addVisits(personIds, visit) {
+    const r = await api<{ logged: number; already: number }>("/api/v1/visits", json({ personIds, ...visit }));
+    forget();
+    return r;
   },
 
   async editVisit(personId, visitId, patch) {

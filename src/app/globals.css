@@ -326,6 +326,22 @@ a.row,a.thread,a.loose{text-decoration:none;color:inherit;}
 a.row:hover{background:var(--raise);padding-left:6px;}
 a.row:active{background:var(--rule);}
 
+/* Saying you saw a room full of people. A strip on the ground under the
+   filters, not a bar over them: it belongs to the list it is about. */
+.picking{
+  display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+  padding:12px 0;border-bottom:1px solid var(--rule-2);
+}
+.picking .meta{gap:18px;}
+
+/* A row while you are choosing. It is a button, so it needs the alignment a
+   link got for free, and it says which it is by the gold square alone: no
+   checkbox, no fill, nothing new on the row. */
+.row.pickable{width:100%;text-align:left;font:inherit;color:inherit;}
+.row.pickable:not(.on) .mark{opacity:.5;}
+.row.pickable:not(.on) .body{opacity:.72;}
+.row.pickable .mark{transition:opacity .18s ease;}
+
 /* Small text actions: drop, undo, attach, someone else. Never buttons with fills. */
 .act{
   font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-2);
