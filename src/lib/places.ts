@@ -4,7 +4,7 @@
  * picks a place on the confirmation screen).
  */
 import { and, eq, gte, lte, sql } from "drizzle-orm";
-import { db, places } from "../db";
+import { db, places, type FilingTransaction } from "../db";
 import { bbox, haversineM } from "./geo";
 
 /**
@@ -14,13 +14,13 @@ import { bbox, haversineM } from "./geo";
  * there (coordinates present) and the place had none, learn them: from then
  * on plain "Here" matches it by proximity.
  */
-export async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null) {
+export async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null, d: ReturnType<typeof db> | FilingTransaction = db()) {
   const name = hint.trim().replace(/\s+/g, " ");
   if (!name) return null;
 
   const exact = sql`lower(${places.name}) = lower(${name})`;
   const similar = sql`similarity(${places.name}, ${name})`;
-  const [hit] = await db().select({ place: places })
+  const [hit] = await d.select({ place: places })
     .from(places)
     .where(and(eq(places.userId, userId), sql`(${exact} or ${similar} > 0.45)`))
     .orderBy(sql`${exact} desc`, sql`${similar} desc`)
@@ -28,15 +28,15 @@ export async function resolvePlaceByName(userId: string, hint: string, lat: numb
 
   if (hit) {
     const learn = lat != null && lng != null && hit.place.lat == null;
-    await db().update(places).set({
+    await d.update(places).set({
       visitCount: sql`${places.visitCount} + 1`,
       lastVisitedAt: new Date(),
       ...(learn ? { lat, lng } : {}),
-    }).where(eq(places.id, hit.place.id));
+    }).where(and(eq(places.id, hit.place.id), eq(places.userId, userId)));
     return learn ? { ...hit.place, lat, lng } : hit.place;
   }
 
-  const [row] = await db().insert(places).values({
+  const [row] = await d.insert(places).values({
     userId, name, kind: "other", lat, lng, visitCount: 1, lastVisitedAt: new Date(),
   }).returning();
   return row;

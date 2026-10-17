@@ -17,7 +17,7 @@
 import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  db, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
+  db, filingTransaction, type FilingTransaction, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
   type ExtractionResult, type CaptureFiling, type FilingDecisions, type Circle,
 } from "../db";
 import { warmth, cadenceFor } from "./warmth";
@@ -85,8 +85,8 @@ export function reviewReason(x: ExtractionResult): string | null {
 export async function reconstructFiling(
   userId: string,
   capture: { id: string; createdAt: Date; placeId: string | null; extraction: ExtractionResult | null },
+  d: ReturnType<typeof db> | FilingTransaction = db(),
 ): Promise<CaptureFiling> {
-  const d = db();
   const x = capture.extraction;
   const created: CaptureFiling["created"] = [];
 
@@ -137,15 +137,38 @@ export async function fileCapture(o: {
   by: "auto" | "user";
   embed: (texts: string[]) => Promise<number[][]>;
 }): Promise<{ filing: CaptureFiling; counts: FilingCounts }> {
-  const d = db();
   const { userId, captureId } = o;
+  // Models run before opening a transaction or taking a lock. Only the
+  // extraction and keep/drop decisions determine the texts to embed.
+  const prepared = await db().query.captures.findFirst({
+    where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
+  });
+  if (!prepared) throw new FilingError(404, "No such note");
+  if (!prepared.extraction) throw new FilingError(409, "This note has not been read yet");
+  const proposed = o.decisions ?? defaultDecisions(prepared.extraction, prepared.placeId);
+  checkShape(prepared.extraction, proposed);
+  const keptNames = new Set(prepared.extraction.people
+    .filter((_, i) => proposed.people[i].action !== "drop").map(p => p.name));
+  const preparedTexts = [
+    ...prepared.extraction.facts.filter((f, i) => proposed.facts[i].keep && keptNames.has(f.personName)).map(f => f.content),
+    ...prepared.extraction.unresolved.filter((_, i) => !proposed.unresolved[i].dismissed && proposed.unresolved[i].personId),
+    ...prepared.extraction.interactions.filter((it, i) => proposed.interactions[i].keep && keptNames.has(it.personName)).map(it => it.summary),
+  ];
+  const vectors = preparedTexts.length ? await o.embed(preparedTexts) : [];
 
+  return filingTransaction(userId, async (d) => {
+  // Worker updates use ordinary UPDATEs and must not interleave with replacement.
+  await d.select({ id: captures.id }).from(captures)
+    .where(and(eq(captures.id, captureId), eq(captures.userId, userId))).for("update");
   const capture = await d.query.captures.findFirst({
     where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
   });
   if (!capture) throw new FilingError(404, "No such note");
   const x = capture.extraction;
   if (!x) throw new FilingError(409, "This note has not been read yet");
+  if (JSON.stringify(x) !== JSON.stringify(prepared.extraction) || capture.status !== prepared.status) {
+    throw new FilingError(409, "This note changed while preparing it. Reload it and look again.");
+  }
 
   const prefs = await d.query.users.findFirst({ where: eq(users.id, userId), columns: { cadenceDefaults: true } });
   const cadenceDefaults = prefs?.cadenceDefaults ?? { family: 14, friends: 21, work: 45, neighbors: 30, other: 90 };
@@ -159,7 +182,7 @@ export async function fileCapture(o: {
 
   const decisions = o.decisions ?? defaultDecisions(x, capture.placeId, (id) => rosterById.get(id)?.tags ?? []);
   checkShape(x, decisions);
-  const previous = capture.filing ?? await reconstructFiling(userId, capture);
+  const previous = capture.filing ?? await reconstructFiling(userId, capture, d);
 
   // One spelling per tag. "younglife" typed on the screen, or proposed by the
   // model, becomes the "YoungLife" the user already has. New spellings are
@@ -226,13 +249,13 @@ export async function fileCapture(o: {
     }
   }
 
-  // Record the rows created so far before anything that can fail. A crash
-  // between here and the end must not create them a second time on retry.
+  // Keep the prior creation record while computing the replacement. All writes
+  // below commit together, including newly created people.
   const interim: CaptureFiling = {
     ...previous,
     created: [...previous.created.filter((c) => !created.some((n) => n.personId === c.personId)), ...created],
   };
-  await d.update(captures).set({ filing: interim }).where(eq(captures.id, captureId));
+  await d.update(captures).set({ filing: interim }).where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
 
   for (const personId of new Set([...circleChanges.keys(), ...tagChanges.keys()])) {
     const circle = circleChanges.get(personId);
@@ -254,7 +277,7 @@ export async function fileCapture(o: {
     if (!row) throw new FilingError(400, "That place is not one of yours");
     place = row;
   } else if (decisions.place.name) {
-    place = await resolvePlaceByName(userId, decisions.place.name, capture.lat, capture.lng);
+    place = await resolvePlaceByName(userId, decisions.place.name, capture.lat, capture.lng, d);
   }
 
   /* 3. rows ------------------------------------------------------------- */
@@ -328,10 +351,12 @@ export async function fileCapture(o: {
   ];
 
   /* 4. embed ------------------------------------------------------------ */
-  // The one external call, made before anything is deleted: if it fails, the
-  // note is exactly as it was.
+  // Check the prepared text order against the validated, tenant-scoped rows.
+  // If anything changed, roll back rather than attach vectors to wrong content.
   const texts = [...factRows.map((f) => f.content), ...interactionRows.map((r) => r.summary)];
-  const vectors = texts.length ? await o.embed(texts) : [];
+  if (JSON.stringify(texts) !== JSON.stringify(preparedTexts)) {
+    throw new FilingError(409, "This note changed while preparing it. Reload it and look again.");
+  }
   factRows.forEach((f, i) => { f.embedding = vectors[i] ?? null; });
   interactionRows.forEach((r, i) => { r.embedding = vectors[factRows.length + i] ?? null; });
 
@@ -437,7 +462,7 @@ export async function fileCapture(o: {
   };
   await d.update(captures)
     .set({ status: "filed", filing, placeId: place?.id ?? null, error: null })
-    .where(eq(captures.id, captureId));
+    .where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
 
   return {
     filing,
@@ -446,6 +471,7 @@ export async function fileCapture(o: {
       threads: threadRows.length, loose: looseRows.length, closed: x.closesThreadIds.length,
     },
   };
+  });
 }
 
 /** Decisions must line up with the extraction they were made against. */
