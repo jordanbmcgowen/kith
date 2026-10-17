@@ -24,16 +24,24 @@ export function PeopleScreen() {
   const circle: Circle | "all" = CIRCLES.some((c) => c.key === circleParam) ? (circleParam as Circle) : "all";
   const tag = params.get("tag")?.trim() || null;
 
-  const [data, setData] = useState<PeopleList | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const filterKey = JSON.stringify([circle, tag]);
+  const [response, setResponse] = useState<{ key: string; data: PeopleList } | null>(null);
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const data = response?.key === filterKey ? response.data : null;
+  const error = failure?.key === filterKey ? failure.message : null;
+  // Tags and total counts are unfiltered. Keep the filter controls in place,
+  // but never show the old people under a newly selected filter.
+  const tags = response?.data.tags ?? [];
 
   useEffect(() => {
     let alive = true;
+    setFailure(null);
     store.people({ circle, tag })
-      .then((next) => { if (alive) { setData(next); setError(null); } })
-      .catch((e) => { if (alive) setError(text(e)); });
+      .then((next) => { if (alive) { setResponse({ key: filterKey, data: next }); setFailure(null); } })
+      .catch((e) => { if (alive) setFailure({ key: filterKey, message: text(e) }); });
     return () => { alive = false; };
-  }, [circle, tag]);
+  }, [circle, tag, filterKey, reloadKey]);
 
   useEffect(() => {
     try { sessionStorage.setItem(PEOPLE_VIEW_KEY, params.toString()); } catch { /* private mode */ }
@@ -67,22 +75,28 @@ export function PeopleScreen() {
           <button key={c.key} type="button" aria-pressed={circle === c.key} onClick={() => setFilter({ circle: c.key })}>{c.label}</button>
         ))}
       </div>
-      {data && data.tags.length > 0 && (
+      {tags.length > 0 && (
         <div className="tabs sub anim" style={style(3)} role="group" aria-label="Tag">
           <button type="button" aria-pressed={!tag} onClick={() => setFilter({ tag: null })}>Any tag</button>
-          {data.tags.map((t) => (
+          {tags.map((t) => (
             <button key={t} type="button" aria-pressed={tag?.toLowerCase() === t.toLowerCase()} onClick={() => setFilter({ tag: t })}>{t}</button>
           ))}
         </div>
       )}
 
-      {error && <p className="empty">Couldn&rsquo;t load your people.<br /><em>{error}</em></p>}
+      {!data && !error && <p className="empty" role="status">Loading your people…</p>}
+      {error && (
+        <div className="empty" role="alert">
+          <p>Couldn&rsquo;t load your people.<br /><em>{error}</em></p>
+          <button type="button" className="link" onClick={() => setReloadKey((k) => k + 1)}>Try again</button>
+        </div>
+      )}
       {data && !error && data.people.length === 0 && (
         <p className="empty">
           {data.counts.people === 0 ? <>No one yet.<br /><em>Record a note and they will be here.</em></> : <>Nobody matches that.<br /><em>Try Everyone, or another tag.</em></>}
         </p>
       )}
-      {data && data.people.length > 0 && (
+      {data && !error && data.people.length > 0 && (
         <div className="list" style={{ marginTop: 4 }}>
           {data.people.map((p, i) => <PersonRow key={p.id} p={p} index={i + 4} />)}
         </div>

@@ -83,6 +83,12 @@ npm run db:generate && npm run db:migrate
 npm run dev
 ```
 
+## Regression checks
+
+See [the focused reliability review](docs/RELIABILITY_REVIEW.md) for isolated
+recorder/UI tests and the separate backend follow-up findings. These checks use
+synthetic data and do not require a production login or database.
+
 ## Decisions already made, and why
 
 - **Postgres, not a vector database.** Facts need to be relational *and*

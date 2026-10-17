@@ -25,9 +25,9 @@ export function FindScreen() {
   const q = (params.get("q") ?? "").trim();
 
   const [text, setText] = useState(q);
-  const [data, setData] = useState<SearchResults | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [response, setResponse] = useState<{ query: string; data: SearchResults } | null>(null);
+  const [failure, setFailure] = useState<{ query: string; message: string } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   // The last query this screen put in the URL, so its own push does not come
   // back and overwrite what is being typed.
   const pushed = useRef(q);
@@ -58,17 +58,21 @@ export function FindScreen() {
 
   useEffect(() => {
     let alive = true;
-    setBusy(true);
+    setFailure(null);
     store.search(q)
-      .then((next) => { if (alive) { setData(next); setError(null); } })
-      .catch((e) => { if (alive) { setError(message(e)); setData(null); } })
-      .finally(() => { if (alive) setBusy(false); });
+      .then((next) => { if (alive) { setResponse({ query: q, data: next }); setFailure(null); } })
+      .catch((e) => { if (alive) { setFailure({ query: q, message: message(e) }); setResponse(null); } });
     return () => { alive = false; };
-  }, [q]);
+  }, [q, reloadKey]);
 
-  const results = q ? data?.results ?? [] : [];
+  // A previous response must never look like a match for a new query, even
+  // during the typing debounce before the URL changes.
+  const current = text.trim() === q;
+  const data = current && response?.query === q ? response.data : null;
+  const error = current && failure?.query === q ? failure.message : null;
+  const searching = text.trim().length >= 2 && !data && !error;
+  const results = q.length >= 2 ? data?.results ?? [] : [];
   const hints = data?.hints ?? [];
-  const settled = !busy && !!data;
 
   return (
     <>
@@ -110,7 +114,14 @@ export function FindScreen() {
         </div>
       )}
 
-      {error && <p className="empty">Search is not answering.<br /><em>{error}</em></p>}
+      {searching && <p className="empty" role="status">Searching your people…</p>}
+      {text.trim().length === 1 && <p className="empty">Type at least two characters to search.</p>}
+      {error && (
+        <div className="empty" role="alert">
+          <p>Search is not answering.<br /><em>{error}</em></p>
+          <button type="button" className="link" onClick={() => setReloadKey((k) => k + 1)}>Try again</button>
+        </div>
+      )}
 
       {!error && q && results.length > 0 && (
         <div className="block">
@@ -124,7 +135,7 @@ export function FindScreen() {
         </div>
       )}
 
-      {!error && q && settled && results.length === 0 && (
+      {!error && q.length >= 2 && data && results.length === 0 && (
         <p className="empty anim" style={style(3)}>
           Nothing yet.<br /><em>Kith only knows what you have told it.</em>
         </p>

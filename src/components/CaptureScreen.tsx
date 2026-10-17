@@ -42,37 +42,29 @@ export function CaptureScreen() {
   // undefined: still asking. null: unavailable or refused.
   const [coords, setCoords] = useState<Coords | null | undefined>(undefined);
   const [canRecord, setCanRecord] = useState(true);
+  const [starting, setStarting] = useState(false);
   const [placeMode, setPlaceMode] = useState<PlaceMode>("here");
   const [placeName, setPlaceName] = useState("");
 
   const recorder = useRef<Recorder | null>(null);
+  const mounted = useRef(false);
+  const stopping = useRef(false);
   const toastTimer = useRef<number | undefined>(undefined);
 
   /* ---- setup ---- */
   useEffect(() => {
+    mounted.current = true;
     setCanRecord(recorderSupported());
     let alive = true;
     store.coords().then((c) => { if (alive) setCoords(c); });
     return () => {
       alive = false;
+      mounted.current = false;
       recorder.current?.cancel();
+      recorder.current = null;
       window.clearTimeout(toastTimer.current);
     };
   }, []);
-
-  /* ---- timer, and the twenty minute ceiling ---- */
-  useEffect(() => {
-    if (stage !== "recording") return;
-    const id = window.setInterval(() => {
-      const r = recorder.current;
-      if (!r) return;
-      const ms = Date.now() - r.startedAt;
-      setElapsed(ms);
-      if (ms >= MAX_MS) void stop();
-    }, 250);
-    return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -94,27 +86,52 @@ export function CaptureScreen() {
 
   /* ---- voice ---- */
   const start = async () => {
+    // The ref guards even two taps before React has disabled the button.
+    if (recorder.current) return;
     setError(null);
     const r = new Recorder();
+    recorder.current = r;
+    setStarting(true);
     try {
       await r.start();
     } catch (e) {
+      if (recorder.current !== r) return;
+      recorder.current = null;
+      setStarting(false);
       setError(micProblem(e));
       return;
     }
-    recorder.current = r;
+    if (recorder.current !== r) {
+      r.cancel();
+      return;
+    }
+    setStarting(false);
     setElapsed(0);
     setStage("recording");
     // A fresh fix while they talk. Whatever we have at upload time is what gets sent.
-    void store.coords({ fresh: true }).then((c) => { if (c) setCoords(c); });
+    void store.coords({ fresh: true }).then((c) => { if (mounted.current && c) setCoords(c); });
   };
 
   const stop = useCallback(async () => {
     const r = recorder.current;
-    if (!r) return;
-    recorder.current = null;
+    if (!r || stopping.current) return;
+    stopping.current = true;
     setStage("saving");
-    const { blob, durationMs } = await r.stop();
+    let recording: Awaited<ReturnType<Recorder["stop"]>>;
+    try {
+      recording = await r.stop();
+    } catch {
+      if (recorder.current !== r) return;
+      recorder.current = null;
+      setStage("idle");
+      setError("The browser couldn't finish the recording. Try recording again, or type the note instead.");
+      return;
+    } finally {
+      stopping.current = false;
+    }
+    if (recorder.current !== r) return;
+    recorder.current = null;
+    const { blob, durationMs } = recording;
     if (blob.size === 0 || durationMs < MIN_MS) {
       setStage("idle");
       setError("That was too short to hear anything. Hold it a moment longer.");
@@ -123,6 +140,27 @@ export function CaptureScreen() {
     await upload({ audio: blob, capturedAt: new Date(r.startedAt), durationMs });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coords, placeMode, placeName]);
+
+  /* ---- timer, and the twenty minute ceiling ---- */
+  useEffect(() => {
+    if (stage !== "recording") return;
+    const id = window.setInterval(() => {
+      const r = recorder.current;
+      if (!r) return;
+      const ms = Date.now() - r.startedAt;
+      setElapsed(ms);
+      if (ms >= MAX_MS) void stop();
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [stage, stop]);
+
+  const typeInstead = () => {
+    recorder.current?.cancel();
+    recorder.current = null;
+    setStarting(false);
+    setError(null);
+    setStage("typing");
+  };
 
   /* ---- typed or pasted ---- */
   const submitText = async () => {
@@ -144,6 +182,7 @@ export function CaptureScreen() {
         placeName: placeMode === "none" ? undefined : placeName.trim() || undefined,
         capturedAt: p.capturedAt,
       });
+      if (!mounted.current) return;
       setPending(null);
       setText("");
       // Keep the choice (a run of notes from the couch stays "Somewhere else"),
@@ -157,6 +196,7 @@ export function CaptureScreen() {
       setRefreshKey((k) => k + 1);
       showToast("Saved. Filing it now.");
     } catch (e) {
+      if (!mounted.current) return;
       setError(
         e instanceof ApiError && e.status === 401
           ? "You are signed out. Open Kith again and sign in; your note is still here."
@@ -188,18 +228,18 @@ export function CaptureScreen() {
             <Waveform recorder={null} />
             <div className="recwrap">
               <i /><i />
-              <button className="recbtn" onClick={start} disabled={!canRecord} aria-label="Start recording">
+              <button className="recbtn" onClick={start} disabled={!canRecord || starting} aria-busy={starting} aria-label="Start recording">
                 <MicIcon />
               </button>
             </div>
             <p className="timer quiet" style={{ marginTop: 22 }}>
-              {canRecord ? "Tap to record" : "No microphone here"}
+              {starting ? "Waiting for the microphone" : canRecord ? "Tap to record" : "No microphone here"}
             </p>
           </div>
 
           {error && <p className="lede anim" style={style(3, { color: "var(--text)" })}>{error}</p>}
 
-          <button className="link anim" style={style(3, { alignSelf: "center" })} onClick={() => { setError(null); setStage("typing"); }}>
+          <button className="link anim" style={style(3, { alignSelf: "center" })} onClick={typeInstead}>
             Type or paste it instead
           </button>
 
