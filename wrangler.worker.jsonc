@@ -13,6 +13,7 @@
 
   "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "kith-audio" }],
   "queues": {
+    "producers": [{ "binding": "CAPTURE_QUEUE", "queue": "kith-captures" }],
     "consumers": [{
       "queue": "kith-captures",
       "max_batch_size": 5,
@@ -21,7 +22,7 @@
       "dead_letter_queue": "kith-captures-dlq"
     }]
   },
-  // 8am Central. Cron runs on UTC; the handler is a Phase 3 stub for now.
-  "triggers": { "crons": ["0 13 * * *"] },
+  // Durable outbox recovery, bounded to 100 dispatches per run.
+  "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true }
 }

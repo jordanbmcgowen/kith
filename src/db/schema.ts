@@ -17,7 +17,7 @@
 
 import {
   pgTable, pgEnum, text, timestamp, integer, real, boolean, jsonb,
-  uuid, index, uniqueIndex, primaryKey, doublePrecision, vector,
+  uuid, index, uniqueIndex, primaryKey, check, doublePrecision, vector,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -293,6 +293,26 @@ export const captures = pgTable("captures", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("captures_user_status_idx").on(t.userId, t.status, t.capturedAt),
+]);
+
+/** Durable capture handoff and request identity. Raw content remains in captures. */
+export const captureJobs = pgTable("capture_jobs", {
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  requestKey: uuid("request_key").notNull(),
+  captureId: uuid("capture_id").notNull().references(() => captures.id, { onDelete: "cascade" }),
+  requestHash: text("request_hash").notNull(),
+  review: boolean("review").default(false).notNull(),
+  availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+  leaseToken: uuid("lease_token"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  attempts: integer("attempts").default(0).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  lastError: text("last_error"),
+}, (t) => [
+  primaryKey({ columns: [t.userId, t.requestKey] }),
+  check("capture_jobs_lease_pair", sql`(${t.leaseToken} is null) = (${t.leaseUntil} is null)`),
+  uniqueIndex("capture_jobs_one_active").on(t.captureId).where(sql`${t.finishedAt} is null`),
+  index("capture_jobs_due").on(t.availableAt).where(sql`${t.finishedAt} is null`),
 ]);
 
 /** Extracted content that did not resolve to a person. Never silently dropped. */

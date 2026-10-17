@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { db, captures, captureStatusEnum } from "@/db";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { route } from "@/lib/api";
+import { route, isUuid } from "@/lib/api";
+import { acceptCapture, dispatchJob, requestHash, legacyRequestKey, findRequest, JobConflict } from "@/lib/capture-jobs";
 import { audioExtension, storedContentType } from "@/lib/audio";
 
 /** Whisper's hard limit. About twenty minutes of speech. */
@@ -15,8 +16,8 @@ const MAX_PLACE_CHARS = 120;
 /**
  * POST /api/v1/captures
  *
- * The capture endpoint returns in well under a second and never waits on a
- * model. Audio goes to R2, a row goes to Postgres, a message goes on the
+ * The capture endpoint never waits on a model. Audio goes to R2, a row
+ * and durable job go to Postgres, a dispatch is attempted on the
  * queue, and the phone gets its 202 back. If the pipeline is down, the note
  * is still safe.
  *
@@ -56,6 +57,27 @@ export const POST = route(async (req: Request) => {
     return NextResponse.json({ error: "That note is too long. Split it up." }, { status: 413 });
   }
 
+  const keyHeader = req.headers.get("Idempotency-Key");
+  if (keyHeader && !isUuid(keyHeader)) return NextResponse.json({ error: "Invalid retry key" }, { status: 400 });
+  const hash = await requestHash({ kind: hasAudio ? "voice" : "text", text, lat, lng, accuracyM, placeHint,
+    capturedAt: str(form.get("capturedAt")) || null, audioType: hasAudio ? storedContentType(audio.type) : null }, hasAudio ? audio : undefined);
+  // Older UI builds supply capturedAt, giving stable retry identity. For
+  // unkeyed API calls without it, preserve the existing distinct-note behavior;
+  // only an explicit key can disambiguate a retry from an identical new note.
+  const requestKey = keyHeader ?? (str(form.get("capturedAt")) ? legacyRequestKey(hash) : crypto.randomUUID());
+  const { env } = getCloudflareContext();
+  try {
+    const prior = await findRequest(userId, requestKey, hash);
+    if (prior) {
+      await dispatchJob(userId, requestKey, env.CAPTURE_QUEUE).catch(() => {});
+      const capture = await db().query.captures.findFirst({ where: (c, { and, eq }) => and(eq(c.userId, userId), eq(c.id, prior.captureId)) });
+      if (!capture) throw new Error("Capture job has no owned capture");
+      return NextResponse.json({ id: capture.id, status: capture.status, kind: capture.kind }, { status: 202 });
+    }
+  } catch (err) {
+    if (err instanceof JobConflict) return NextResponse.json({ error: err.message }, { status: 409 });
+    throw err;
+  }
   const id = crypto.randomUUID();
   let audioKey: string | null = null;
 
@@ -64,28 +86,24 @@ export const POST = route(async (req: Request) => {
     // iOS records mp4, Chrome records webm; the worker reads it back off this key.
     const ext = audioExtension(audio.type);
     audioKey = `captures/${userId}/${id}.${ext}`;
-    const { env } = getCloudflareContext();
     await env.AUDIO.put(audioKey, audio, {
       httpMetadata: { contentType: storedContentType(audio.type) },
     });
   }
 
-  await db().insert(captures).values({
-    id,
-    userId,
-    kind: audioKey ? "voice" : "text",
-    status: "uploaded",
-    audioKey,
-    rawText: text || null,
-    lat, lng, accuracyM,
-    placeHint,
-    capturedAt,
-  });
-
-  const { env } = getCloudflareContext();
-  await env.CAPTURE_QUEUE.send({ captureId: id, userId });
-
-  return NextResponse.json({ id, status: "uploaded", kind: audioKey ? "voice" : "text" }, { status: 202 });
+  try {
+    const saved = await acceptCapture(userId, requestKey, hash, {
+      id, kind: audioKey ? "voice" : "text", audioKey, rawText: text || null,
+      lat, lng, accuracyM, placeHint, capturedAt,
+    });
+    // Durable acceptance is success even if this immediate dispatch is rejected
+    // or its acknowledgement is lost. The scheduled dispatcher owns recovery.
+    await dispatchJob(userId, requestKey, env.CAPTURE_QUEUE).catch(() => {});
+    return NextResponse.json({ id: saved.id, status: saved.status, kind: saved.kind }, { status: 202 });
+  } catch (err) {
+    if (err instanceof JobConflict) return NextResponse.json({ error: err.message }, { status: 409 });
+    throw err;
+  }
 });
 
 /** GET /api/v1/captures?status=needs_review — recent captures, newest first. */

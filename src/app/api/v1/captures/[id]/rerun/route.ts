@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { requireUser } from "@/lib/auth";
 import { route, isUuid } from "@/lib/api";
-import { db, captures } from "@/db";
-import { and, eq } from "drizzle-orm";
+import { rerunCapture, dispatchJob, JobConflict } from "@/lib/capture-jobs";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -20,18 +19,19 @@ export const POST = route(async (_req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   if (!isUuid(id)) return NextResponse.json({ error: "No such note" }, { status: 404 });
 
-  const capture = await db().query.captures.findFirst({
-    where: and(eq(captures.id, id), eq(captures.userId, userId)),
-    columns: { status: true },
-  });
-  if (!capture) return NextResponse.json({ error: "No such note" }, { status: 404 });
-  if (capture.status === "uploaded" || capture.status === "transcribing" || capture.status === "extracting") {
-    return NextResponse.json({ error: "Already working on this note." }, { status: 409 });
-  }
-
-  await db().update(captures).set({ status: "uploaded", error: null }).where(eq(captures.id, id));
+  const supplied = _req.headers.get("Idempotency-Key");
+  if (supplied && !isUuid(supplied)) return NextResponse.json({ error: "Invalid retry key" }, { status: 400 });
+  // Old callers retain their active-note 409 behavior. Updated clients keep
+  // a request key until they receive an acknowledgement, even after completion.
   const { env } = getCloudflareContext();
-  await env.CAPTURE_QUEUE.send({ captureId: id, userId, review: true });
-
-  return NextResponse.json({ id, status: "uploaded" }, { status: 202 });
+  const key = supplied ?? crypto.randomUUID();
+  try {
+    const capture = await rerunCapture(userId, id, key);
+    if (!capture) return NextResponse.json({ error: "No such note" }, { status: 404 });
+    await dispatchJob(userId, key, env.CAPTURE_QUEUE).catch(() => {});
+    return NextResponse.json({ id, status: capture.status }, { status: 202 });
+  } catch (err) {
+    if (err instanceof JobConflict) return NextResponse.json({ error: err.message }, { status: 409 });
+    throw err;
+  }
 });

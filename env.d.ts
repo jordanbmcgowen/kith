@@ -11,7 +11,7 @@ declare global {
     AUDIO: R2Bucket;
     /** Producer side of the kith-captures queue. Consumed by kith-processor.
      *  `review` asks the consumer to stop at needs_review whatever the confidence. */
-    CAPTURE_QUEUE: Queue<{ captureId: string; userId: string; review?: boolean }>;
+    CAPTURE_QUEUE: Queue<{ captureId: string; userId: string; requestKey?: string; review?: boolean }>;
     /** Service binding to kith-processor, which holds the model keys. POST /embed. */
     PROCESSOR: Fetcher;
   }

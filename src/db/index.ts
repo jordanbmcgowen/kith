@@ -49,3 +49,32 @@ export function scoped(userId: string) {
     where: <T extends { userId: any }>(t: T, ...rest: any[]) => and(own(t), ...rest),
   };
 }
+
+/** Request-local interactive transaction. Never share its pool across requests. */
+export async function filingTransaction<T>(userId: string, work: (tx: FilingTransaction) => Promise<T>): Promise<T> {
+  const { Pool } = await import("@neondatabase/serverless");
+  const { drizzle: transactionalDrizzle } = await import("drizzle-orm/neon-serverless");
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) throw new Error("DATABASE_URL is not set");
+  const pool = new Pool({ connectionString: url, max: 1 });
+  try {
+    const client = await pool.connect();
+    try {
+      return await transactionalDrizzle(client, { schema }).transaction(async (tx) => {
+        // All filings for this tenant share people, tag spelling and aggregates.
+        // Lock before reading any state; READ COMMITTED sees the preceding commit.
+        await tx.select({ id: schema.users.id }).from(schema.users)
+          .where(eq(schema.users.id, userId)).for("update");
+        return work(tx);
+      }, { isolationLevel: "read committed" });
+    } finally {
+      // Also runs if BEGIN fails, before Drizzle enters its own try/finally.
+      client.release(true);
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
+type TransactionDatabase = import("drizzle-orm/neon-serverless").NeonDatabase<typeof schema>;
+export type FilingTransaction = Parameters<Parameters<TransactionDatabase["transaction"]>[0]>[0];
