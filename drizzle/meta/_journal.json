@@ -29,6 +29,13 @@
       "when": 1788796332203,
       "tag": "0003_supreme_ender_wiggin",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792209900000,
+      "tag": "0004_capture_jobs",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { store, ApiError, type Coords } from "@/lib/store";
+import { store, ApiError, type Coords, type CaptureInput } from "@/lib/store";
 import { Recorder, recorderSupported } from "@/lib/recorder";
 import { audioExtension } from "@/lib/audio";
 import { Waveform } from "./Waveform";
@@ -17,7 +17,7 @@ type PlaceMode = "here" | "elsewhere" | "none";
 const PLACE_LABELS: Record<PlaceMode, string> = { here: "Here", elsewhere: "Somewhere else", none: "No place" };
 
 /** A note that has been captured but not yet accepted by the server. Kept until it is. */
-type Pending = { audio?: Blob; text?: string; capturedAt: Date; durationMs: number };
+type Pending = { audio?: Blob; text?: string; capturedAt: Date; durationMs: number; input?: CaptureInput };
 
 /** Whisper's file limit is 25MB; twenty minutes of opus or aac stays well under it. */
 const MAX_MS = 20 * 60 * 1000;
@@ -133,17 +133,19 @@ export function CaptureScreen() {
 
   /* ---- upload, with the note held until the server has it ---- */
   const upload = async (p: Pending) => {
+    // Freeze the full payload with its identity. A later GPS fix or edited
+    // place must not turn a retry into a different request under the same key.
+    p.input ??= {
+      requestKey: crypto.randomUUID(), audio: p.audio,
+      filename: p.audio ? `note.${audioExtension(p.audio.type)}` : undefined,
+      text: p.text, coords: placeMode === "here" ? coords ?? null : null,
+      placeName: placeMode === "none" ? undefined : placeName.trim() || undefined,
+      capturedAt: p.capturedAt,
+    };
     setPending(p);
     setStage("saving");
     try {
-      await store.capture({
-        audio: p.audio,
-        filename: p.audio ? `note.${audioExtension(p.audio.type)}` : undefined,
-        text: p.text,
-        coords: placeMode === "here" ? coords ?? null : null,
-        placeName: placeMode === "none" ? undefined : placeName.trim() || undefined,
-        capturedAt: p.capturedAt,
-      });
+      await store.capture(p.input);
       setPending(null);
       setText("");
       // Keep the choice (a run of notes from the couch stays "Somewhere else"),

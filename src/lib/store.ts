@@ -131,6 +131,8 @@ export type CaptureView = {
 export type Coords = { lat: number; lng: number; accuracy: number | null };
 
 export type CaptureInput = {
+  /** Stable for every retry of this pending note. */
+  requestKey?: string;
   audio?: Blob;
   /** Must carry the extension that matches the blob's type. See src/lib/audio.ts. */
   filename?: string;
@@ -369,6 +371,8 @@ const json = (body: unknown): RequestInit => ({
 /** The last fix we got, so a second request can reuse it while asking for a fresh one. */
 let lastCoords: Coords | null = null;
 
+const rerunKeys = new Map<string, string>();
+
 const liveStore: Store = {
   isDemo: false,
 
@@ -397,7 +401,8 @@ const liveStore: Store = {
     }
     if (input.placeName?.trim()) form.append("place", input.placeName.trim());
     form.append("capturedAt", input.capturedAt.toISOString());
-    return api("/api/v1/captures", { method: "POST", body: form });
+    input.requestKey ??= crypto.randomUUID();
+    return api("/api/v1/captures", { method: "POST", body: form, headers: { "Idempotency-Key": input.requestKey } });
   },
 
   captures() {
@@ -413,7 +418,14 @@ const liveStore: Store = {
   },
 
   async rerun(id) {
-    await api(`/api/v1/captures/${encodeURIComponent(id)}/rerun`, { method: "POST" });
+    let key = rerunKeys.get(id);
+    try { key ??= sessionStorage.getItem(`kith:rerun:${id}`) ?? undefined; } catch { /* private mode */ }
+    key ??= crypto.randomUUID();
+    rerunKeys.set(id, key);
+    try { sessionStorage.setItem(`kith:rerun:${id}`, key); } catch { /* private mode */ }
+    await api(`/api/v1/captures/${encodeURIComponent(id)}/rerun`, { method: "POST", headers: { "Idempotency-Key": key } });
+    rerunKeys.delete(id);
+    try { sessionStorage.removeItem(`kith:rerun:${id}`); } catch { /* private mode */ }
   },
 
   async reviewQueue() {

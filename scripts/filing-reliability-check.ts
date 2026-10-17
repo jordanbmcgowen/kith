@@ -48,6 +48,13 @@ try {
   await assert.rejects(run(async () => { throw new Error("injected embedding failure"); }), /injected/);
   assert.deepEqual(await snapshot(), initial, "embedding failure rolls back newly created people and interim filing");
   await run(embed);
+  const named = defaultDecisions(x, null);
+  named.place = { name: "Synthetic repeated venue", placeId: null };
+  await run(embed, named);
+  await run(embed, named);
+  const repeatedPlaces = await d.select().from(places).where(eq(places.userId, user.id));
+  assert.equal(repeatedPlaces.length, 1);
+  assert.equal(repeatedPlaces[0].visitCount, 1, "same named-place confirmation is one visit");
   const before = await snapshot();
   const changed = defaultDecisions(x, null);
   changed.people[0].tags = ["Changed"];

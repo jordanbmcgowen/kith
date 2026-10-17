@@ -23,17 +23,10 @@ import { embed, EMBED_MAX_TEXTS } from "../lib/ai/embed";
 import { audioExtension } from "../lib/audio";
 import { resolvePlace, resolvePlaceByName } from "../lib/places";
 import { fileCapture, reconstructFiling, reviewReason } from "../lib/filing";
+import { claimJob, withLease, finishJob, failJob, StaleJob, dispatchDue, MAX_JOB_ATTEMPTS, type JobMessage, type JobLease, type CaptureQueue } from "../lib/capture-jobs";
 import { and, eq, isNull } from "drizzle-orm";
 
-export type Msg = {
-  captureId: string;
-  userId: string;
-  /** Stop at needs_review whatever the confidence. Set when the user asks for a re-run. */
-  review?: boolean;
-};
-
-/** How many deliveries before a capture is left `failed` and visible. */
-const MAX_ATTEMPTS = 3;
+export type Msg = JobMessage;
 
 /**
  * An error that a retry cannot fix: silence, a missing object, a rejected
@@ -76,25 +69,18 @@ export default {
         await processCapture(msg.body, env);
         msg.ack();
       } catch (err) {
-        const giveUp = isPermanent(err) || msg.attempts >= MAX_ATTEMPTS;
-        console.error(`[capture ${captureId}] attempt ${msg.attempts} failed${giveUp ? ", giving up" : ", will retry"}:`, err);
-        // Record the error on every attempt so it is visible in the app, but
-        // only flip the status to failed once we are done trying. A note that
-        // is about to be retried is not failed yet.
-        await db().update(captures)
-          .set(giveUp ? { status: "failed", error: String(err) } : { error: String(err) })
-          .where(eq(captures.id, captureId));
-        if (giveUp) msg.ack();
-        else msg.retry({ delaySeconds: 30 * msg.attempts });
+        // processCapture records errors through the fenced lease. Queue
+        // delivery counts are transport-local and do not own capture state.
+        console.error(`[capture ${captureId}] processing failed`);
+        if (isPermanent(err)) msg.ack();
+        else msg.retry({ delaySeconds: 30 });
       }
     }
   },
 
-  async scheduled(controller: ScheduledController) {
-    // Phase 3: threads due today, birthdays this week, warmth that just
-    // dropped below cadence. Nothing runs yet; this exists so the cron in
-    // wrangler.worker.jsonc has a handler and does not error every morning.
-    console.log(`scheduled ${controller.cron}: nothing to do until Phase 3`);
+  async scheduled(_controller: ScheduledController, env: Env) {
+    if (!env.CAPTURE_QUEUE) throw new Error("CAPTURE_QUEUE binding is required for recovery");
+    await dispatchDue(env.CAPTURE_QUEUE);
   },
 };
 
@@ -107,6 +93,22 @@ export type Models = { transcribe: typeof transcribe; extract: typeof extract; e
 const LIVE: Models = { transcribe, extract, embed };
 
 export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) {
+  const lease = await claimJob(msg);
+  if (!lease) return; // completed, duplicate, foreign, or already leased
+  try {
+    await processLeasedCapture(lease, env, models);
+  } catch (err) {
+    if (err instanceof StaleJob) return;
+    await failJob(lease, isPermanent(err) || lease.attempts >= MAX_JOB_ATTEMPTS, err);
+    throw err;
+  }
+}
+
+async function processLeasedCapture(lease: JobLease, env: Env, models: Models) {
+  const msg = lease;
+  const update = (values: Partial<typeof captures.$inferInsert>) => withLease(lease, async tx => {
+    await tx.update(captures).set(values).where(and(eq(captures.id, lease.captureId), eq(captures.userId, lease.userId)));
+  });
   const { captureId, userId } = msg;
   const capture = await db().query.captures.findFirst({
     where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
@@ -133,7 +135,7 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
   let transcript = capture.transcript ?? capture.rawText ?? "";
   if (capture.audioKey && !capture.transcript) {
     console.log(`[capture ${captureId}] transcribe ${capture.audioKey}`);
-    await db().update(captures).set({ status: "transcribing" }).where(eq(captures.id, captureId));
+    await update({ status: "transcribing" });
     const obj = await env.AUDIO.get(capture.audioKey);
     if (!obj) throw new PermanentError("Audio object missing from R2");
 
@@ -151,9 +153,7 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
       nameHints: roster.flatMap((p) => [p.displayName, p.goesBy].filter(Boolean) as string[]),
     });
     transcript = out.text;
-    await db().update(captures)
-      .set({ transcript, durationSec: out.durationSec })
-      .where(eq(captures.id, captureId));
+    await update({ transcript, durationSec: out.durationSec });
     console.log(`[capture ${captureId}] transcribed ${out.durationSec}s, ${transcript.length} chars`);
   }
   if (!transcript.trim()) throw new PermanentError("Empty transcript. Nothing was said, or the microphone was muted.");
@@ -163,17 +163,21 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
   // typed place name wins. Coordinates alone mean "I am there now" and go
   // through proximity matching (then Google, if a key is set). No hint and
   // no coordinates means the note is filed without a place.
-  const place = capture.placeId
-    ? (await db().query.places.findFirst({ where: and(eq(places.id, capture.placeId), eq(places.userId, userId)) })) ?? null
+  const place = await withLease(lease, async tx => {
+    const resolved = capture.placeId
+    ? (await tx.query.places.findFirst({ where: and(eq(places.id, capture.placeId), eq(places.userId, userId)) })) ?? null
     : capture.placeHint
-      ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng)
+      ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng, tx)
       : capture.lat != null && capture.lng != null
-        ? await resolvePlace(userId, capture.lat, capture.lng, env.GOOGLE_PLACES_KEY)
+        ? await resolvePlace(userId, capture.lat, capture.lng, env.GOOGLE_PLACES_KEY, tx)
         : null;
+    await tx.update(captures).set({ placeId: resolved?.id ?? null }).where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
+    return resolved;
+  });
 
   /* 3. extract ---------------------------------------------------------- */
   console.log(`[capture ${captureId}] extract (${roster.length} candidates, place: ${place?.name ?? "none"})`);
-  await db().update(captures).set({ status: "extracting" }).where(eq(captures.id, captureId));
+  await update({ status: "extracting" });
 
   const nearIds = place
     ? new Set((await db().select().from(personPlaces).where(
@@ -224,23 +228,25 @@ export async function processCapture(msg: Msg, env: Env, models: Models = LIVE) 
   // A note that filed before keeps the record of what it created, so the next
   // filing can reuse or remove those rows. Its decisions are dropped: they
   // were made against the previous extraction and no longer line up.
-  const carried = capture.filing ?? (capture.extraction ? await reconstructFiling(userId, capture) : null);
   const reason = msg.review ? "re-run, waiting for a look" : reviewReason(result);
-
-  await db().update(captures).set({
-    extraction: result,
-    placeId: place?.id ?? null,
-    filing: carried ? { ...carried, decisions: null } : null,
-    status: reason ? "needs_review" : "extracting",
-    error: null,
-  }).where(eq(captures.id, captureId));
+  await withLease(lease, async tx => {
+    const current = await tx.query.captures.findFirst({ where: and(eq(captures.id, captureId), eq(captures.userId, userId)) });
+    if (!current) throw new StaleJob("Capture removed");
+    const carried = current.filing ?? (current.extraction ? await reconstructFiling(userId, current, tx) : null);
+    await tx.update(captures).set({
+      extraction: result, placeId: place?.id ?? null,
+      filing: carried ? { ...carried, decisions: null } : null,
+      status: reason ? "needs_review" : "extracting", error: null,
+    }).where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
+    if (reason) await finishJob(tx, lease);
+  });
 
   if (reason) {
     console.log(`[capture ${captureId}] needs_review (${reason}): ${result.people.length} people, ${result.facts.length} facts, ${result.threads.length} threads, ${result.unresolved.length} loose. Nothing filed yet.`);
     return;
   }
 
-  const { counts } = await fileCapture({ userId, captureId, by: "auto", embed: models.embed });
+  const { counts } = await fileCapture({ userId, captureId, by: "auto", embed: models.embed, lease });
   console.log(`[capture ${captureId}] filed: ${counts.people} people, ${counts.facts} facts, ${counts.interactions} interactions, ${counts.threads} threads, ${counts.loose} loose`);
 }
 
@@ -266,5 +272,6 @@ function upcomingDays(d: Date, timeZone: string, n: number): string {
 
 export interface Env {
   AUDIO: R2Bucket;
+  CAPTURE_QUEUE?: CaptureQueue;
   GOOGLE_PLACES_KEY?: string;
 }

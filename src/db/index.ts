@@ -66,7 +66,7 @@ export async function filingTransaction<T>(userId: string, work: (tx: FilingTran
         await tx.select({ id: schema.users.id }).from(schema.users)
           .where(eq(schema.users.id, userId)).for("update");
         return work(tx);
-      });
+      }, { isolationLevel: "read committed" });
     } finally {
       // Also runs if BEGIN fails, before Drizzle enters its own try/finally.
       client.release(true);

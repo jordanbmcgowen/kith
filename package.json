@@ -14,7 +14,8 @@
     "live:check": "node --env-file-if-exists=.env scripts/live-check.mjs",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
-    "pipeline:check": "esbuild scripts/pipeline-check.ts --bundle --platform=node --format=esm --outfile=.wrangler/tmp/pipeline-check.mjs --log-level=warning && node --env-file-if-exists=.env .wrangler/tmp/pipeline-check.mjs"
+    "pipeline:check": "esbuild scripts/pipeline-check.ts --bundle --platform=node --format=esm --outfile=.wrangler/tmp/pipeline-check.mjs --log-level=warning && node --env-file-if-exists=.env .wrangler/tmp/pipeline-check.mjs",
+    "test:reliability": "node scripts/local-reliability-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.68.0",

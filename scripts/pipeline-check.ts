@@ -19,12 +19,20 @@
  */
 import { and, eq, like, inArray } from "drizzle-orm";
 import {
-  db, users, people, captures, facts, interactions, threads, places, personPlaces, looseThreads,
+  db, users, people, captures, captureJobs, facts, interactions, threads, places, personPlaces, looseThreads,
 } from "../src/db";
 import type { FilingDecisions } from "../src/db/schema";
-import { processCapture, type Models } from "../src/workers/process-capture";
+import { processCapture as processDurableCapture, type Msg, type Env, type Models } from "../src/workers/process-capture";
 import { fileCapture, reconstructFiling, reviewReason, defaultDecisions, NEW_PEOPLE_REVIEW_AT } from "../src/lib/filing";
 import type { Extraction } from "../src/lib/ai/extract";
+
+// Each explicit pipeline run represents a distinct durable job. Actual queue
+// redelivery tests live in capture-job-check.ts and reuse the exact same key.
+async function processCapture(msg: Msg, env: Env, models: Models) {
+  const requestKey = crypto.randomUUID();
+  await db().insert(captureJobs).values({ userId: msg.userId, captureId: msg.captureId, requestKey, requestHash: "pipeline-fixture", review: msg.review ?? false });
+  return processDurableCapture({ ...msg, requestKey }, env, models);
+}
 
 const MARK = "PIPELINE CHECK";
 const DIM = 1536;

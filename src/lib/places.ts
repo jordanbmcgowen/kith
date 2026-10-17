@@ -14,7 +14,7 @@ import { bbox, haversineM } from "./geo";
  * there (coordinates present) and the place had none, learn them: from then
  * on plain "Here" matches it by proximity.
  */
-export async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null, d: ReturnType<typeof db> | FilingTransaction = db()) {
+export async function resolvePlaceByName(userId: string, hint: string, lat: number | null, lng: number | null, d: ReturnType<typeof db> | FilingTransaction = db(), previousPlaceId: string | null = null) {
   const name = hint.trim().replace(/\s+/g, " ");
   if (!name) return null;
 
@@ -28,9 +28,9 @@ export async function resolvePlaceByName(userId: string, hint: string, lat: numb
 
   if (hit) {
     const learn = lat != null && lng != null && hit.place.lat == null;
-    await d.update(places).set({
-      visitCount: sql`${places.visitCount} + 1`,
-      lastVisitedAt: new Date(),
+    const sameVisit = hit.place.id === previousPlaceId;
+    if (!sameVisit || learn) await d.update(places).set({
+      ...(!sameVisit ? { visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() } : {}),
       ...(learn ? { lat, lng } : {}),
     }).where(and(eq(places.id, hit.place.id), eq(places.userId, userId)));
     return learn ? { ...hit.place, lat, lng } : hit.place;
@@ -48,9 +48,9 @@ export async function resolvePlaceByName(userId: string, hint: string, lat: numb
  * Places bill near zero. Without a Google key, unknown coordinates stay
  * unnamed rather than guessed.
  */
-export async function resolvePlace(userId: string, lat: number, lng: number, googleKey?: string) {
+export async function resolvePlace(userId: string, lat: number, lng: number, googleKey?: string, d: ReturnType<typeof db> | FilingTransaction = db()) {
   const b = bbox(lat, lng, 400);
-  const known = await db().select().from(places).where(and(
+  const known = await d.select().from(places).where(and(
     eq(places.userId, userId),
     gte(places.lat, b.minLat), lte(places.lat, b.maxLat),
     gte(places.lng, b.minLng), lte(places.lng, b.maxLng),
@@ -63,15 +63,16 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
     .sort((a, c) => a.d - c.d)[0];
 
   if (hit) {
-    await db().update(places)
+    await d.update(places)
       .set({ visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() })
-      .where(eq(places.id, hit.p.id));
+      .where(and(eq(places.id, hit.p.id), eq(places.userId, userId)));
     return hit.p;
   }
 
   if (!googleKey) return null;
   const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": googleKey,
@@ -87,7 +88,7 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
   const g = json.places?.[0];
   if (!g) return null;
 
-  const [row] = await db().insert(places).values({
+  const [row] = await d.insert(places).values({
     userId,
     name: g.displayName?.text ?? "Unnamed place",
     googlePlaceId: g.id,

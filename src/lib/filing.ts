@@ -14,12 +14,13 @@
  * nothing else refers to them. Running it twice with the same decisions leaves
  * the database exactly as it was after the first run.
  */
-import { and, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, isNull, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  db, filingTransaction, type FilingTransaction, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
+  db, captureJobs, filingTransaction, type FilingTransaction, users, captures, people, facts, interactions, threads, places, personPlaces, looseThreads,
   type ExtractionResult, type CaptureFiling, type FilingDecisions, type Circle,
 } from "../db";
+import { assertLease, finishJob, type JobLease } from "./capture-jobs";
 import { warmth, cadenceFor } from "./warmth";
 import { resolvePlaceByName } from "./places";
 import { AUTO_FILE_THRESHOLD } from "./ai/threshold";
@@ -135,9 +136,12 @@ export async function fileCapture(o: {
   /** Absent means "as the model proposed". */
   decisions?: FilingDecisions;
   by: "auto" | "user";
+  lease?: JobLease;
   embed: (texts: string[]) => Promise<number[][]>;
 }): Promise<{ filing: CaptureFiling; counts: FilingCounts }> {
   const { userId, captureId } = o;
+  if (o.by === "auto" && !o.lease) throw new Error("Automatic filing requires a job lease");
+  if (o.lease && (o.lease.userId !== userId || o.lease.captureId !== captureId)) throw new Error("Lease does not match this filing");
   // Models run before opening a transaction or taking a lock. Only the
   // extraction and keep/drop decisions determine the texts to embed.
   const prepared = await db().query.captures.findFirst({
@@ -145,6 +149,9 @@ export async function fileCapture(o: {
   });
   if (!prepared) throw new FilingError(404, "No such note");
   if (!prepared.extraction) throw new FilingError(409, "This note has not been read yet");
+  if (o.by === "user" && prepared.status !== "needs_review" && prepared.status !== "filed") {
+    throw new FilingError(409, "Still working on this note. Give it a moment.");
+  }
   const proposed = o.decisions ?? defaultDecisions(prepared.extraction, prepared.placeId);
   checkShape(prepared.extraction, proposed);
   const keptNames = new Set(prepared.extraction.people
@@ -157,9 +164,10 @@ export async function fileCapture(o: {
   const vectors = preparedTexts.length ? await o.embed(preparedTexts) : [];
 
   return filingTransaction(userId, async (d) => {
-  // Worker updates use ordinary UPDATEs and must not interleave with replacement.
+  // Job and filing writers share tenant-then-capture lock order.
   await d.select({ id: captures.id }).from(captures)
     .where(and(eq(captures.id, captureId), eq(captures.userId, userId))).for("update");
+  if (o.lease) await assertLease(d, o.lease);
   const capture = await d.query.captures.findFirst({
     where: and(eq(captures.id, captureId), eq(captures.userId, userId)),
   });
@@ -277,7 +285,7 @@ export async function fileCapture(o: {
     if (!row) throw new FilingError(400, "That place is not one of yours");
     place = row;
   } else if (decisions.place.name) {
-    place = await resolvePlaceByName(userId, decisions.place.name, capture.lat, capture.lng, d);
+    place = await resolvePlaceByName(userId, decisions.place.name, capture.lat, capture.lng, d, capture.placeId);
   }
 
   /* 3. rows ------------------------------------------------------------- */
@@ -463,6 +471,10 @@ export async function fileCapture(o: {
   await d.update(captures)
     .set({ status: "filed", filing, placeId: place?.id ?? null, error: null })
     .where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
+
+  if (o.lease) await finishJob(d, o.lease);
+  else await d.update(captureJobs).set({ finishedAt: sql`now()`, leaseToken: null, leaseUntil: null })
+    .where(and(eq(captureJobs.userId, userId), eq(captureJobs.captureId, captureId), isNull(captureJobs.finishedAt)));
 
   return {
     filing,
