@@ -48,7 +48,7 @@ export async function resolvePlaceByName(userId: string, hint: string, lat: numb
  * Places bill near zero. Without a Google key, unknown coordinates stay
  * unnamed rather than guessed.
  */
-export async function resolvePlace(userId: string, lat: number, lng: number, googleKey?: string, d: ReturnType<typeof db> | FilingTransaction = db()) {
+async function nearbyPlace(userId: string, lat: number, lng: number, d: ReturnType<typeof db> | FilingTransaction = db()) {
   const b = bbox(lat, lng, 400);
   const known = await d.select().from(places).where(and(
     eq(places.userId, userId),
@@ -56,20 +56,18 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
     gte(places.lng, b.minLng), lte(places.lng, b.maxLng),
   ));
 
-  const hit = known
+  return known
     .filter((p) => p.lat != null && p.lng != null)
     .map((p) => ({ p, d: haversineM({ lat, lng }, { lat: p.lat!, lng: p.lng! }) }))
     .filter((x) => x.d <= x.p.radiusM)
-    .sort((a, c) => a.d - c.d)[0];
+    .sort((a, c) => a.d - c.d)[0]?.p ?? null;
+}
 
-  if (hit) {
-    await d.update(places)
-      .set({ visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() })
-      .where(and(eq(places.id, hit.p.id), eq(places.userId, userId)));
-    return hit.p;
-  }
+type GooglePlace = { googlePlaceId: string; name: string; lat: number; lng: number };
 
-  if (!googleKey) return null;
+/** Read-only precompute. Never invoke external lookup under tenant locks. */
+export async function preparePlaceLookup(userId: string, lat: number, lng: number, googleKey?: string): Promise<GooglePlace | null> {
+  if (!googleKey || await nearbyPlace(userId, lat, lng)) return null;
   const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
     method: "POST",
     signal: AbortSignal.timeout(10_000),
@@ -87,13 +85,32 @@ export async function resolvePlace(userId: string, lat: number, lng: number, goo
   const json = (await res.json()) as any;
   const g = json.places?.[0];
   if (!g) return null;
-
-  const [row] = await d.insert(places).values({
-    userId,
+  return {
+    googlePlaceId: g.id as string,
     name: g.displayName?.text ?? "Unnamed place",
-    googlePlaceId: g.id,
     lat: g.location?.latitude ?? lat,
     lng: g.location?.longitude ?? lng,
+  };
+}
+
+/** Recheck local places under the caller's fence before applying precomputed
+ * Google data. A local place added while lookup was pending still wins. */
+export async function resolvePlace(userId: string, lat: number, lng: number, google: GooglePlace | null, d: ReturnType<typeof db> | FilingTransaction = db()) {
+  const hit = await nearbyPlace(userId, lat, lng, d);
+  if (hit) {
+    await d.update(places)
+      .set({ visitCount: sql`${places.visitCount} + 1`, lastVisitedAt: new Date() })
+      .where(and(eq(places.id, hit.id), eq(places.userId, userId)));
+    return hit;
+  }
+
+  if (!google) return null;
+  const [row] = await d.insert(places).values({
+    userId,
+    name: google.name,
+    googlePlaceId: google.googlePlaceId,
+    lat: google.lat,
+    lng: google.lng,
     visitCount: 1,
     lastVisitedAt: new Date(),
   }).onConflictDoUpdate({

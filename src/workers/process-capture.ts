@@ -21,7 +21,7 @@ import { transcribe } from "../lib/ai/transcribe";
 import { extract, type Candidate } from "../lib/ai/extract";
 import { embed, EMBED_MAX_TEXTS } from "../lib/ai/embed";
 import { audioExtension } from "../lib/audio";
-import { resolvePlace, resolvePlaceByName } from "../lib/places";
+import { resolvePlace, resolvePlaceByName, preparePlaceLookup } from "../lib/places";
 import { fileCapture, reconstructFiling, reviewReason } from "../lib/filing";
 import { claimJob, withLease, finishJob, failJob, StaleJob, dispatchDue, MAX_JOB_ATTEMPTS, type JobMessage, type JobLease, type CaptureQueue } from "../lib/capture-jobs";
 import { and, eq, isNull } from "drizzle-orm";
@@ -163,13 +163,16 @@ async function processLeasedCapture(lease: JobLease, env: Env, models: Models) {
   // typed place name wins. Coordinates alone mean "I am there now" and go
   // through proximity matching (then Google, if a key is set). No hint and
   // no coordinates means the note is filed without a place.
+  const google = !capture.placeId && !capture.placeHint && capture.lat != null && capture.lng != null
+    ? await preparePlaceLookup(userId, capture.lat, capture.lng, env.GOOGLE_PLACES_KEY)
+    : null;
   const place = await withLease(lease, async tx => {
     const resolved = capture.placeId
     ? (await tx.query.places.findFirst({ where: and(eq(places.id, capture.placeId), eq(places.userId, userId)) })) ?? null
     : capture.placeHint
       ? await resolvePlaceByName(userId, capture.placeHint, capture.lat, capture.lng, tx)
       : capture.lat != null && capture.lng != null
-        ? await resolvePlace(userId, capture.lat, capture.lng, env.GOOGLE_PLACES_KEY, tx)
+        ? await resolvePlace(userId, capture.lat, capture.lng, google, tx)
         : null;
     await tx.update(captures).set({ placeId: resolved?.id ?? null }).where(and(eq(captures.id, captureId), eq(captures.userId, userId)));
     return resolved;

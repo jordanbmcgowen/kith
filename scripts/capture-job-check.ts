@@ -1,7 +1,7 @@
 /** Dedicated synthetic DB only. Same bundle adapter as filing-reliability-check.ts. */
 import assert from "node:assert/strict";
 import { and, eq, sql } from "drizzle-orm";
-import { db, users, captures, captureJobs, people, facts, interactions, threads, looseThreads, places, personPlaces, type ExtractionResult } from "../src/db";
+import { db, filingTransaction, users, captures, captureJobs, people, facts, interactions, threads, looseThreads, places, personPlaces, type ExtractionResult } from "../src/db";
 import { acceptCapture, requestHash, dispatchJob, dispatchDue, claimJob, rerunCapture, findRequest, JobConflict, StaleJob, withLease, type JobMessage } from "../src/lib/capture-jobs";
 import worker, { processCapture, type Models } from "../src/workers/process-capture";
 import { fileCapture, defaultDecisions } from "../src/lib/filing";
@@ -99,14 +99,42 @@ try {
   assert.equal((await getJob(inline.key))!.lastError, null, "late dispatch failure cannot dirty a completed job");
   assert.equal((await getCapture(inline.capture.id))!.status, "filed");
 
-  const transient = await make(); let attempts = 0;
-  const flaky = { ...models(), extract: async () => { if (++attempts === 1) throw new Error("transient extraction failure"); return extract("Retry person"); } };
+  const transient = await make(); let attempts = 0; let outage = true;
+  let failedToken: string | null = null;
+  const flaky = { ...models(), extract: async () => {
+    attempts++;
+    if (outage) {
+      failedToken ??= (await getJob(transient.key))!.leaseToken;
+      throw new Error("transient extraction failure");
+    }
+    return extract("Retry person");
+  } };
   await assert.rejects(processCapture(message(transient.capture.id, transient.key), env, flaky), /transient/);
-  assert.equal((await getJob(transient.key))!.leaseToken, null);
-  assert.equal((await getJob(transient.key))!.finishedAt, null);
-  await processCapture(message(transient.capture.id, transient.key), env, flaky);
+  const duplicates = await Promise.allSettled(Array.from({ length: 3 }, () =>
+    processCapture(message(transient.capture.id, transient.key), env, flaky)));
+  assert.equal(attempts, 1, "duplicate deliveries during backoff must not spend model calls or attempts");
+  assert(duplicates.every(result => result.status === "fulfilled"), "backoff deliveries are harmless ACKs");
+  const cooling = (await getJob(transient.key))!;
+  assert.equal(cooling.attempts, 1);
+  assert.equal(cooling.finishedAt, null);
+  assert(cooling.leaseUntil && cooling.leaseUntil.getTime() > Date.now());
+  assert(cooling.leaseToken && cooling.leaseToken !== failedToken, "failed worker token must be invalidated during cooldown");
+  assert.notEqual((await getCapture(transient.capture.id))!.status, "failed");
+  await assert.rejects(withLease({ userId: user.id, captureId: transient.capture.id, requestKey: transient.key,
+    token: failedToken!, attempts: 1, review: false }, async () => {}), StaleJob);
+  const earlySends: JobMessage[] = [];
+  await dispatchJob(user.id, transient.key, { send: async msg => { earlySends.push(msg); } });
+  assert.equal(earlySends.length, 0, "dispatcher also respects processing backoff");
+  // Advance only synthetic timestamps, rather than sleeping through backoff.
+  await expire(transient.key); await due(transient.key); outage = false;
+  const retryMessages: JobMessage[] = [];
+  await dispatchJob(user.id, transient.key, { send: async msg => { retryMessages.push(msg); } });
+  assert.equal(retryMessages.length, 1);
+  assert((await getJob(transient.key))!.availableAt.getTime() > Date.now(), "dispatch reserves its own future send window");
+  await processCapture(retryMessages[0], env, flaky);
   assert.equal((await getJob(transient.key))!.attempts, 2);
   assert.equal((await getCapture(transient.capture.id))!.status, "filed");
+  console.log("PASS duplicate burst during processing backoff preserves attempts; later dispatch reservation does not delay eligible processing");
 
   const failed = await make();
   const permanent = { ...models(), extract: async () => { throw Object.assign(new Error("permanent fixture rejection"), { status: 400 }); } };
@@ -180,6 +208,42 @@ try {
   assert.equal((await getCapture(exhausted.capture.id))!.status, "failed");
   assert((await getJob(exhausted.key))!.finishedAt);
   console.log("PASS expired lease reclamation, attempt exhaustion, expired-owner rejection and stale extraction/filing completion");
+
+  // Google network time must hold no tenant lock. A place added while the
+  // lookup is pending must win when the fenced write rechecks local places.
+  const googleKey = crypto.randomUUID();
+  const googleCapture = await acceptCapture(user.id, googleKey, "synthetic-google-note", {
+    kind: "text", rawText: "Synthetic Google lookup", capturedAt: new Date(), lat: -43, lng: -145,
+  });
+  const searching = gate(); const realFetch = globalThis.fetch; let googleCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith("https://places.googleapis.com/")) {
+      googleCalls++; searching.enter(); await searching.wait;
+      return Response.json({ places: [{ id: "synthetic-google-result", displayName: { text: "Google candidate" }, location: { latitude: -43, longitude: -145 } }] });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  const lookup = processCapture(message(googleCapture.id, googleKey), { ...env, GOOGLE_PLACES_KEY: "synthetic-stub-only" }, models(extract("Google person")));
+  await searching.ready;
+  const concurrentPlace = filingTransaction(user.id, async tx => {
+    const [place] = await tx.insert(places).values({ userId: user.id, name: "Added while Google waited", lat: -43, lng: -145 }).returning();
+    return place;
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const known = await Promise.race([concurrentPlace, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Google lookup held the tenant lock")), 2000);
+    })]);
+    searching.release(); await lookup;
+    assert.equal(googleCalls, 1);
+    assert.equal((await getCapture(googleCapture.id))!.placeId, known.id);
+    const savedPlace = await d.query.places.findFirst({ where: and(eq(places.userId, user.id), eq(places.id, known.id)) });
+    assert.equal(savedPlace!.visitCount, 1);
+    assert.equal((await d.select().from(places).where(and(eq(places.userId, user.id), eq(places.googlePlaceId, "synthetic-google-result")))).length, 0);
+  } finally {
+    clearTimeout(timer); searching.release(); await Promise.allSettled([lookup, concurrentPlace]); globalThis.fetch = realFetch;
+  }
+  console.log("PASS Google precompute holds no tenant lock and fenced resolution prefers a newly known local place");
 
   const isolated = await make(); const beforeForeign = await snapshot(isolated.capture.id);
   await processCapture({ userId: foreign.id, captureId: isolated.capture.id, requestKey: isolated.key }, env, models());

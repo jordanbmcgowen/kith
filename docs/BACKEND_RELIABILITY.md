@@ -52,12 +52,19 @@ write checks its tenant, capture, request key, lease token, unfinished state and
 lease expiry under the same locks. The persisted transcript is reused on retry.
 Place resolution is fenced and persisted before extraction, so a failed model
 call does not repeat a successful place visit. The optional Google Places lookup
-has a ten-second timeout but currently runs inside that fenced place transaction.
+has a ten-second timeout and runs as read-only precompute outside the transaction.
+Fenced resolution rechecks nearby local places before applying the prepared
+Google candidate. A local place added while Google was pending takes precedence;
+no network call occurs under the tenant lock.
 
 Expired leases can be reclaimed; the old worker's later transcription,
 extraction, embedding result or failure cannot change the new owner's state.
-Three durable claims are allowed. Transient failures release the lease for
-retry; permanent errors or exhausted claims atomically finish the job and leave
+Three durable claims are allowed. Transient failures invalidate the active worker token and replace it with an
+unowned cooldown token expiring after 30 seconds. Both processing claims and
+dispatch skip that cooldown. Dispatch's separate available_at reservation does
+not postpone processing once the cooldown expires. Duplicate deliveries during
+backoff are acknowledged without model calls or attempt increments. Permanent
+errors or exhausted claims atomically finish the job and leave
 the capture visibly failed. Model calls exceeding ten minutes are discarded;
 there is no heartbeat or cancellation guarantee for external model work.
 
@@ -70,11 +77,31 @@ rejected. Person reuse/removal, tag spelling and complete-list tag decisions
 remain as before. Reconfirming the same named place does not add another visit.
 Raw text, audio keys and existing transcripts are not edited.
 
-The transaction uses a fresh Neon Pool and client within the request. Client
+The transaction uses explicit READ COMMITTED isolation and a fresh Neon Pool
+and client within the request. Client
 release covers BEGIN failure as well as commit/rollback; pool shutdown runs in
 finally. Nothing stores a live connection across Worker requests. Tenant locks
 serialize filing and job writers; unrelated contact-sync writers do not take
 those locks. This is not a general concurrency rewrite of all account writes.
+
+## Transaction and runtime limits
+
+No application lock_timeout, statement_timeout, connection timeout or whole
+transaction deadline is configured. Database or platform defaults may apply but
+were not inspected in production. SQL/network stalls and lock contention can
+therefore hold or wait for a transaction until the server/runtime ends it; the
+ten-minute job lease does not cancel a blocked query or free its locks. There
+are no model network calls inside these transactions after the Google precompute
+change, but SQL work still grows with note size.
+
+The worker config sets no explicit CPU/duration limit. Transcription, extraction
+and embeddings have no application deadline or heartbeat. A platform timeout
+or a call exceeding the ten-minute lease leaves recoverable durable work, but
+may require another paid model call after reclamation. Expiry fences later writes;
+it does not guarantee cancellation of the original external request. Local tests
+advance synthetic lease timestamps; they do not establish live Worker wall-time,
+CPU, connection or lock-timeout behavior. Those limits require independent review
+before any production rollout.
 
 ## Local verification
 
@@ -105,7 +132,8 @@ The runner starts and stops its own loopback HTTP bridge and removes its bundles
 The suites check database rollback after replacement deletion, serialized
 confirmations, no transaction held during embeddings, changed preparation,
 request atomicity and identity conflicts, rejection and timeout after queue
-acceptance, recovery, duplicate delivery, transient/permanent failures, rerun
+acceptance, recovery, duplicate delivery, a three-delivery burst during processing
+backoff without attempt consumption, dispatch eligibility after cooldown, transient/permanent failures, rerun
 identity, lease expiry/exhaustion, old worker completion after newer confirmation,
 stale transcription, cross-tenant IDs, HTTP/store retries and the existing
 person/tag/place pipeline assertions. All data and models are synthetic.
@@ -147,11 +175,15 @@ not verify live Neon WebSockets, Cloudflare queue ordering, scheduler delivery,
 service bindings or R2 behavior. The installed Neon driver documents request-local
 Pool/Client use on Workers, and both configs already use nodejs_compat.
 
-PR 7 was inspected without merging it. Its store/confirmation signatures remain
-compatible. Both branches touch CaptureScreen: retain PR 7's mounted/recorder
-cancellation guards while preserving this branch's frozen Pending.input and
-request key. Coordinate that merge explicitly and rerun both UI and backend
-suites. This branch does not contain PR 7's recorder/UI tests.
+PR 7 was inspected without merging it. The exact overlapping files are
+package.json and src/components/CaptureScreen.tsx. Its store/confirmation
+signatures remain compatible. Integrate on a separate reviewed branch: combine
+all package.json test scripts without dropping either suite, then retain PR 7's
+mounted/recorder cancellation and stopping guards alongside this branch's frozen
+Pending.input and request key. Keep the mounted check after awaiting the upload.
+Run PR 7's recorder/UI suites, this branch's synthetic backend suite, typecheck
+and both Worker builds on that combined tree before reviewing it. This task did
+not merge either branch or run PR 7's UI suites against a combined tree.
 
 Recovery depends on the existing cron and queue being enabled and the database
 being reachable. Dispatch throughput is bounded; extended outages or a backlog
@@ -160,3 +192,16 @@ payload memory/latency has not been load-tested in Workers. Session storage may 
 still works until navigation/reload. Pending audio/text survives retries on the
 current screen, not a browser crash. Those are existing persistence limits, not
 an offline capture feature. Independent review remains required before deployment.
+
+## Backoff correction evidence
+
+The independent review found that released leases allowed duplicate deliveries
+to spend attempts before available_at became due. The regression now injects a
+transient outage and delivers three duplicates during backoff, asserting one
+model call/attempt and an unfinished, nonfailed capture. It then advances only
+synthetic cooldown/dispatch timestamps and proves that reserved dispatch does
+not block eligible processing. It also verifies that the failed worker's old
+token cannot write during cooldown. Running this regression with the previous
+published capture-jobs implementation fails on the model-call/attempt assertion;
+the corrected implementation passes. This correction reuses the existing schema;
+no additional migration was created or applied.

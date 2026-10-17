@@ -38,9 +38,10 @@ export async function withLease<T>(lease: JobLease, work: (tx: FilingTransaction
     await assertLease(tx, lease);
     const result = await work(tx);
     const [job] = await tx.select({ finishedAt: captureJobs.finishedAt, leaseToken: captureJobs.leaseToken }).from(captureJobs).where(owned(lease.userId, lease.requestKey));
-    // A successful callback may intentionally finish/release its lease. The
-    // tenant lock prevents any other owner changing it during this callback.
-    if (!job || (!job.finishedAt && job.leaseToken !== null)) await assertLease(tx, lease);
+    // Only this callback can change ownership while holding the tenant lock.
+    // Failure can replace the worker token with an unowned cooldown token;
+    // finishing clears it. Otherwise check expiry again before committing.
+    if (!job || (!job.finishedAt && job.leaseToken === lease.token)) await assertLease(tx, lease);
     return result;
   });
 }
@@ -60,7 +61,7 @@ export async function claimJob(msg: JobMessage): Promise<JobLease | null> {
       return null;
     }
     const token = crypto.randomUUID();
-    await tx.update(captureJobs).set({ leaseToken: token, leaseUntil: sql`now() + interval '10 minutes'`, attempts: job.attempts + 1 })
+    await tx.update(captureJobs).set({ leaseToken: token, leaseUntil: sql`clock_timestamp() + interval '10 minutes'`, attempts: job.attempts + 1 })
       .where(owned(msg.userId, requestKey));
     return { userId: msg.userId, captureId: msg.captureId, requestKey, token, attempts: job.attempts + 1, review: job.review };
   });
@@ -74,8 +75,16 @@ export async function finishJob(tx: FilingTransaction, lease: JobLease) {
 export async function failJob(lease: JobLease, terminal: boolean, error: unknown) {
   await withLease(lease, async tx => {
     const message = error instanceof Error ? error.message : "Processing failed";
-    await tx.update(captureJobs).set({ leaseToken: null, leaseUntil: null, lastError: message,
-      ...(terminal ? { finishedAt: sql`now()` } : { availableAt: sql`now() + interval '30 seconds'` }),
+    await tx.update(captureJobs).set({ lastError: message,
+      ...(terminal ? { finishedAt: sql`now()`, leaseToken: null, leaseUntil: null } : {
+        // Invalidate the worker and reserve processing eligibility separately
+        // from dispatch's available_at. No worker receives this cooldown token.
+        // Duplicate deliveries cannot claim or spend attempts for 30 seconds,
+        // even if a dispatch reservation changes available_at meanwhile.
+        leaseToken: crypto.randomUUID(),
+        leaseUntil: sql`clock_timestamp() + interval '30 seconds'`,
+        availableAt: sql`clock_timestamp() + interval '30 seconds'`,
+      }),
     }).where(owned(lease.userId, lease.requestKey));
     await tx.update(captures).set(terminal ? { status: "failed", error: message } : { error: message })
       .where(and(eq(captures.id, lease.captureId), eq(captures.userId, lease.userId)));
