@@ -39,7 +39,7 @@ export function PeopleScreen() {
     setFailure(null);
     store.people({ circle, tag })
       .then((next) => { if (alive) { setResponse({ key: filterKey, data: next }); setFailure(null); } })
-      .catch((e) => { if (alive) { setFailure({ key: filterKey, message: text(e) }); setResponse(null); } });
+      .catch((e) => { if (alive) setFailure({ key: filterKey, message: text(e) }); });
     return () => { alive = false; };
   }, [circle, tag, filterKey, reloadKey]);
 

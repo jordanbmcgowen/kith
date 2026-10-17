@@ -60,6 +60,10 @@ export async function runBrowserChecks() {
     await check("People errors show no stale rows and can retry", async () => {
       await go("/people?circle=work&tag=fail"); await wait(() => !!document.querySelector('[role="alert"]'), "People error missing");
       assert(!text().includes("Bob Example"), "Stale rows shown after error");
+      button("Any tag").click(); await wait(() => text().includes("Bob Example"), "Clearing the failed tag did not recover");
+      assert(!new URLSearchParams(location.search).has("tag"), "Failed tag stayed in the URL");
+      await fetch("/__fixture/reset", { method: "POST" });
+      await go("/people?circle=work&tag=fail"); await wait(() => !!document.querySelector('[role="alert"]'), "Second people error missing");
       button("Try again").click(); await wait(() => text().includes("Bob Example"), "People retry failed");
     });
     await check("Re-reading rebuilds choices for the new extraction", async () => {
