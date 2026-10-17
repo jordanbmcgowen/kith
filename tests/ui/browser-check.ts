@@ -83,7 +83,11 @@ export async function runBrowserChecks() {
       await check(`Reassigning by ${mode} preserves tags and circle`, async () => {
         await go("/notes/labels"); await wait(() => text().includes("New Person"), "Labels note missing");
         if (mode === "suggestion") button("Bob Example").click();
-        else { button("Someone else").click(); button("Bob Example", document.querySelector(".picker")!).click(); }
+        else {
+          button("Someone else").click();
+          await wait(() => !!document.querySelector(".picker"), "Person picker did not open");
+          button("Bob Example", document.querySelector(".picker")!).click();
+        }
         await wait(() => !!document.querySelector('[aria-label="Remove Colleagues"]'), "Existing tag was lost");
         assert(button("Work").getAttribute("aria-pressed") === "true", "Existing circle was lost");
         button("File it").click(); await wait(() => location.pathname === "/record", "Labels confirmation failed");
