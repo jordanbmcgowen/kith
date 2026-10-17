@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -40,12 +40,19 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  * Every fix is one tap, and nothing here is a form.
  */
 export function ConfirmScreen({ id }: { id: string }) {
+  // App-router navigation can reuse this component for a different note.
+  // Review decisions are positional, so none may carry across note IDs.
+  return <ConfirmNote key={id} id={id} />;
+}
+
+function ConfirmNote({ id }: { id: string }) {
   const router = useRouter();
   const [view, setView] = useState<CaptureView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<FilingDecisions | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [picker, setPicker] = useState<Picker>(null);
@@ -56,6 +63,7 @@ export function ConfirmScreen({ id }: { id: string }) {
   useEffect(() => {
     let alive = true;
     let timer: number | undefined;
+    setError(null);
     const load = async () => {
       try {
         const next = await store.note(id);
@@ -116,8 +124,9 @@ export function ConfirmScreen({ id }: { id: string }) {
 
   /* ---- file it ---- */
   const confirm = async () => {
-    if (!view || !decisions) return;
+    if (!view || !decisions || saving.current) return;
     if (view.capture.status === "filed" && !dirty) { router.push("/record"); return; }
+    saving.current = true;
     setBusy(true);
     setProblem(null);
     try {
@@ -130,15 +139,22 @@ export function ConfirmScreen({ id }: { id: string }) {
       setProblem(e instanceof ApiError && e.status === 401
         ? "You are signed out. Open Kith again and sign in; your fixes are still here."
         : text(e));
+      saving.current = false;
       setBusy(false);
     }
   };
 
   const rerun = async () => {
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
     setProblem(null);
     try {
       await store.rerun(id);
+      // Clear the old extraction and its choices together. Otherwise the
+      // initializer can restore the old positional decisions before polling
+      // receives the new extraction (which may have different people/items).
+      setView(null);
       setDecisions(null);
       setDirty(false);
       setUndo({});
@@ -147,6 +163,7 @@ export function ConfirmScreen({ id }: { id: string }) {
     } catch (e) {
       setProblem(text(e));
     }
+    saving.current = false;
     setBusy(false);
   };
 
@@ -155,11 +172,14 @@ export function ConfirmScreen({ id }: { id: string }) {
     return (
       <>
         <BackLink />
-        <p className="empty">Couldn&rsquo;t load this note.<br /><em>{error}</em></p>
+        <div className="empty" role="alert">
+          <p>Couldn&rsquo;t load this note.<br /><em>{error}</em></p>
+          <button type="button" className="link" onClick={() => setReloadKey((k) => k + 1)}>Try again</button>
+        </div>
       </>
     );
   }
-  if (!view) return <BackLink />;
+  if (!view) return <><BackLink /><p className="empty" role="status">Loading your note…</p></>;
 
   const c = view.capture;
   const x = c.extraction;
@@ -322,6 +342,23 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
   const tags = dec.tags ?? [];
   const [adding, setAdding] = useState(false);
 
+  const choosePerson = (personId: string | null) => {
+    const action = personId ? "match" : "new";
+    const nextId = personId ?? createdId;
+    if (dec.action !== action || dec.personId !== nextId) {
+      const selected = nextId ? rosterById.get(nextId) : undefined;
+      // Tags are a complete replacement on filing. Start from the selected
+      // person's labels, not the person this note previously pointed at.
+      onPerson({
+        action,
+        personId: nextId,
+        circle: selected?.circle ?? p.circle ?? "other",
+        tags: mergeTags(selected?.tags ?? [], p.tags ?? []),
+      });
+    }
+    onPicker(false);
+  };
+
   const facts = first ? x.facts.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
   const interactions = first ? x.interactions.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
   const threads = first ? x.threads.map((f, k) => [f, k] as const).filter(([f]) => f.personName === p.name) : [];
@@ -348,7 +385,7 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
             <span className="meta">
               <span>Could be</span>
               {suggestions.map((s) => (
-                <button key={s.id} className="act gold" onClick={() => onPerson({ action: "match", personId: s.id })}>{s.displayName}</button>
+                <button key={s.id} className="act gold" onClick={() => choosePerson(s.id)}>{s.displayName}</button>
               ))}
             </span>
           )}
@@ -390,10 +427,7 @@ function PersonBlock({ index, p, i, x, dec, decisions, first, rosterById, roster
               roster={roster}
               preferred={[]}
               newName={p.name}
-              onPick={(personId) => {
-                onPerson(personId ? { action: "match", personId } : { action: "new", personId: createdId });
-                onPicker(false);
-              }}
+              onPick={choosePerson}
               onClose={() => onPicker(false)}
             />
           )}
